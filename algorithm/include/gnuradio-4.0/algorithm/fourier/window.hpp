@@ -1,6 +1,6 @@
 
-#ifndef GRAPH_PROTOTYPE_ALGORITHM_WINDOW_HPP
-#define GRAPH_PROTOTYPE_ALGORITHM_WINDOW_HPP
+#ifndef GNURADIO_ALGORITHM_WINDOW_HPP
+#define GNURADIO_ALGORITHM_WINDOW_HPP
 
 #include <algorithm>
 #include <array>
@@ -8,10 +8,11 @@
 #include <numbers>
 #include <ranges>
 #include <string_view>
-#include <utils.hpp>
 #include <vector>
 
 #include <fmt/format.h>
+
+#include <gnuradio-4.0/meta/utils.hpp>
 
 namespace gr::algorithm::window {
 
@@ -22,7 +23,7 @@ namespace gr::algorithm::window {
 enum class Type : int { None, Rectangular, Hamming, Hann, HannExp, Blackman, Nuttall, BlackmanHarris, BlackmanNuttall, FlatTop, Exponential, Kaiser };
 using enum Type;
 inline static constexpr std::array<Type, 12>     TypeList{ None, Rectangular, Hamming, Hann, HannExp, Blackman, Nuttall, BlackmanHarris, BlackmanNuttall, FlatTop, Exponential, Kaiser };
-inline static constexpr fair::meta::fixed_string TypeNames = "[None, Rectangular, Hamming, Hann, HannExp, Blackman, Nuttall, BlackmanHarris, BlackmanNuttall, FlatTop, Exponential, Kaiser]";
+inline static constexpr gr::meta::fixed_string TypeNames = "[None, Rectangular, Hamming, Hann, HannExp, Blackman, Nuttall, BlackmanHarris, BlackmanNuttall, FlatTop, Exponential, Kaiser]";
 
 constexpr std::string_view
 to_string(Type window) noexcept {
@@ -91,7 +92,7 @@ bessel_i0(const T x) noexcept {
  * @param windowFunction The type of window function to create.
  * @param Container std::vector containing the values of the window function.
  */
-template<fair::meta::array_or_vector_type ContainerType, typename T = ContainerType::value_type>
+template<gr::meta::array_or_vector_type ContainerType, typename T = ContainerType::value_type>
     requires std::is_floating_point_v<T>
 void
 create(ContainerType &container, Type windowFunction, const T beta = static_cast<T>(1.6)) {
@@ -233,4 +234,4 @@ create<std::vector<double>>(std::vector<double> &container, Type windowFunction,
 
 } // namespace gr::algorithm::window
 
-#endif // GRAPH_PROTOTYPE_ALGORITHM_WINDOW_HPP
+#endif // GNURADIO_ALGORITHM_WINDOW_HPP

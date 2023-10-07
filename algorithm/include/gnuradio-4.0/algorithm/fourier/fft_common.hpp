@@ -1,10 +1,13 @@
-#ifndef GRAPH_PROTOTYPE_ALGORITHM_FFT_COMMON_HPP
-#define GRAPH_PROTOTYPE_ALGORITHM_FFT_COMMON_HPP
+#ifndef GNURADIO_ALGORITHM_FFT_COMMON_HPP
+#define GNURADIO_ALGORITHM_FFT_COMMON_HPP
 
-#include "fft_types.hpp"
 #include <algorithm>
 #include <cmath>
 #include <vector>
+
+#include <fmt/format.h>
+
+#include "fft_types.hpp"
 
 namespace gr::algorithm {
 
@@ -32,4 +35,4 @@ computePhaseSpectrum(const std::vector<T> &fftOut, std::vector<U> &phaseSpectrum
 }
 
 } // namespace gr::algorithm
-#endif // GRAPH_PROTOTYPE_ALGORITHM_FFT_COMMON_HPP
+#endif // GNURADIO_ALGORITHM_FFT_COMMON_HPP

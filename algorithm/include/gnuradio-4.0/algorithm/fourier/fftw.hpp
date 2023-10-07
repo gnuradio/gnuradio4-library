@@ -1,16 +1,12 @@
-#ifndef GRAPH_PROTOTYPE_ALGORITHM_FFTW_HPP
-#define GRAPH_PROTOTYPE_ALGORITHM_FFTW_HPP
+#ifndef GNURADIO_ALGORITHM_FFTW_HPP
+#define GNURADIO_ALGORITHM_FFTW_HPP
 
-#include "dataset.hpp"
+#include <fftw3.h>
+
 #include "fft_types.hpp"
-#include "fftw3.h"
-#include "history_buffer.hpp"
-#include "node.hpp"
 #include "window.hpp"
 
 namespace gr::algorithm {
-
-using namespace fair::graph;
 
 template<typename T>
 concept FFTwDoubleType = std::is_same_v<T, std::complex<double>> || std::is_same_v<T, double>;
@@ -215,4 +211,4 @@ private:
 
 } // namespace gr::algorithm
 
-#endif // GRAPH_PROTOTYPE_ALGORITHM_FFTW_HPP
+#endif // GNURADIO_ALGORITHM_FFTW_HPP
