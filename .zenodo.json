@@ -110,7 +110,7 @@
   ],
   "related_identifiers": [
     {
-      "identifier": "https://github.com/fair-acc/gnuradio4",
+      "identifier": "https://github.com/gnuradio/gnuradio4",
       "relation": "isSupplementTo",
       "scheme": "url"
     }
