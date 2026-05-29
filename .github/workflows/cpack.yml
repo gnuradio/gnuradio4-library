@@ -10,12 +10,12 @@ jobs:
     name: "Ubuntu | g++-14 | RelWithDebInfo | CPack"
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/fair-acc/gr4-build-container:latest
+      image: ghcr.io/gnuradio/ci:ubuntu-24.04-4.0
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -94,12 +94,12 @@ jobs:
     name: "Emscripten | RelWithDebInfo | CPack"
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/fair-acc/gr4-build-container:latest
+      image: ghcr.io/gnuradio/ci:ubuntu-24.04-4.0-emscripten
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 

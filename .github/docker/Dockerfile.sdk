@@ -1,0 +1,43 @@
+FROM ghcr.io/gnuradio/ci:ubuntu-26.04-4.0 AS builder
+
+ARG GIT_SHA=unknown
+
+WORKDIR /src/gnuradio4
+COPY . .
+
+ENV CC=gcc \
+    CXX=g++ \
+    CMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+RUN cmake -S . -B /build/gnuradio4 \
+      -DCMAKE_COLOR_DIAGNOSTICS=ON \
+      -DDISABLE_EXTERNAL_DEPS_WARNINGS=ON \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DCMAKE_INSTALL_PREFIX=/opt/gnuradio4 \
+      -DUSE_CCACHE=OFF \
+      -DENABLE_EXAMPLES=OFF \
+      -DENABLE_TESTING=OFF \
+      -DENABLE_COVERAGE=OFF \
+      -DADDRESS_SANITIZER=OFF \
+    && cmake --build /build/gnuradio4 --parallel \
+    && cmake --install /build/gnuradio4 \
+    && mkdir -p /opt/gnuradio4/share/gnuradio4-sdk \
+    && printf 'git_sha=%s\nprefix=/opt/gnuradio4\n' "${GIT_SHA}" > /opt/gnuradio4/share/gnuradio4-sdk/manifest
+
+FROM ghcr.io/gnuradio/ci:ubuntu-26.04-4.0 AS sdk
+
+ARG GIT_SHA=unknown
+
+LABEL org.opencontainers.image.source="https://github.com/gnuradio/gnuradio4" \
+      org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.description="GNU Radio 4 SDK image for downstream out-of-tree module builds" \
+      org.opencontainers.image.licenses="MIT"
+
+COPY --from=builder /opt/gnuradio4 /opt/gnuradio4
+
+ENV GNURADIO4_PREFIX=/opt/gnuradio4 \
+    CMAKE_PREFIX_PATH=/opt/gnuradio4 \
+    LD_LIBRARY_PATH=/opt/gnuradio4/lib:/opt/gnuradio4/lib64:${LD_LIBRARY_PATH} \
+    PATH=/opt/gnuradio4/bin:${PATH}
+
+WORKDIR /work
