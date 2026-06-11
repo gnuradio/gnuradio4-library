@@ -18,7 +18,16 @@ find_package(PkgConfig QUIET)
 option(ENABLE_EXAMPLES "Enable example builds" ON)
 option(ENABLE_TESTING "Enable test builds" ON)
 option(GR_USE_FETCHCONTENT_DEPS "Allow CMake to download selected third-party dependencies with FetchContent" OFF)
+option(USE_CCACHE "Use ccache if available" ON)
 set(GR_HTTP_ENABLED OFF)
+
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM AND USE_CCACHE)
+  message(STATUS "ccache found and will be used")
+  set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM}")
+else()
+  message(STATUS "ccache will not be used")
+endif()
 
 if(ENABLE_TESTING
    AND (UNIX
