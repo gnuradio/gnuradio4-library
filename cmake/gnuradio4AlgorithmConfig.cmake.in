@@ -1,9 +1,0 @@
-@PACKAGE_INIT@
-
-include(CMakeFindDependencyMacro)
-
-find_dependency(gnuradio4 CONFIG)
-
-include("${CMAKE_CURRENT_LIST_DIR}/gnuradio4AlgorithmTargets.cmake")
-
-check_required_components(gnuradio4Algorithm)

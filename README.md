@@ -1,8 +1,8 @@
-# GNU Radio 4 Algorithm
+# GNU Radio 4 Library
 
-This repository contains the reusable non-block DSP and algorithm libraries split out of GNU Radio 4.
+This repository contains the reusable non-block DSP and algorithm libraries and tools that can be used across the ecosystem.
 
-It builds against an installed `gnuradio4-core` SDK and installs the camelCase CMake package `gnuradio4Algorithm`.
+It builds against an installed `gnuradio4-core` SDK and installs the CMake package `gnuradio4Library`.
 
 ## Build model
 
@@ -12,7 +12,7 @@ It builds against an installed `gnuradio4-core` SDK and installs the camelCase C
 
 ## Package naming
 
-- repository name: `gnuradio4-algorithm`
-- CMake package name: `gnuradio4Algorithm`
+- repository name: `gnuradio4-library`
+- CMake package name: `gnuradio4Library`
 - exported target namespace: `gnuradio4::`
-
+- compatibility include directory, target, and namespace: `algorithm`, `gnuradio-algorithm`, and `gr::algorithm`

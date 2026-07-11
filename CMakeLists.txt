@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.27)
 
 project(
-  gnuradio4Algorithm
+  gnuradio4Library
   VERSION 4.0.0
   LANGUAGES CXX)
 
@@ -111,18 +111,18 @@ endif()
 if(NOT TARGET exprtk)
   add_library(exprtk STATIC third_party/exprtk.cpp)
   set_target_properties(exprtk PROPERTIES POSITION_INDEPENDENT_CODE ON)
-  target_include_directories(
-    exprtk
-    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party>
-           $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+  target_include_directories(exprtk PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party>
+                                           $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 endif()
 if(NOT TARGET gnuradio4::exprtk)
   add_library(gnuradio4::exprtk ALIAS exprtk)
 endif()
 
-set(GR4_EXPORT_NAME gnuradio4AlgorithmTargets)
-set(GR4_CMAKE_INSTALL_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/gnuradio4Algorithm")
-set(GR4_PKG_VERSION "${PROJECT_VERSION}-git" CACHE STRING "Version string used in gnuradio4Algorithm.pc")
+set(GR4_EXPORT_NAME gnuradio4LibraryTargets)
+set(GR4_CMAKE_INSTALL_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/gnuradio4Library")
+set(GR4_PKG_VERSION
+    "${PROJECT_VERSION}-git"
+    CACHE STRING "Version string used in gnuradio4Library.pc")
 set(GR_TEST_HELPER_LIBRARIES "")
 
 if(ENABLE_TESTING)
@@ -133,26 +133,29 @@ add_subdirectory(bench)
 add_subdirectory(algorithm)
 
 configure_package_config_file(
-  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/gnuradio4AlgorithmConfig.cmake.in"
-  "${CMAKE_CURRENT_BINARY_DIR}/gnuradio4AlgorithmConfig.cmake"
-  INSTALL_DESTINATION "${GR4_CMAKE_INSTALL_DIR}")
+  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/gnuradio4LibraryConfig.cmake.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/gnuradio4LibraryConfig.cmake" INSTALL_DESTINATION "${GR4_CMAKE_INSTALL_DIR}")
 
 write_basic_package_version_file(
-  "${CMAKE_CURRENT_BINARY_DIR}/gnuradio4AlgorithmConfigVersion.cmake"
+  "${CMAKE_CURRENT_BINARY_DIR}/gnuradio4LibraryConfigVersion.cmake"
   VERSION "${PROJECT_VERSION}"
   COMPATIBILITY SameMajorVersion)
 
-configure_file(cmake/gnuradio4Algorithm.pc.in "${CMAKE_CURRENT_BINARY_DIR}/gnuradio4Algorithm.pc" @ONLY)
+configure_file(cmake/gnuradio4Library.pc.in "${CMAKE_CURRENT_BINARY_DIR}/gnuradio4Library.pc" @ONLY)
+
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/gnuradio4LibraryConfig.cmake"
+              "${CMAKE_CURRENT_BINARY_DIR}/gnuradio4LibraryConfigVersion.cmake"
+              "${CMAKE_CURRENT_BINARY_DIR}/gnuradio4Library.pc" DESTINATION "${GR4_CMAKE_INSTALL_DIR}")
 
 install(
-  FILES "${CMAKE_CURRENT_BINARY_DIR}/gnuradio4AlgorithmConfig.cmake"
-        "${CMAKE_CURRENT_BINARY_DIR}/gnuradio4AlgorithmConfigVersion.cmake"
-        "${CMAKE_CURRENT_BINARY_DIR}/gnuradio4Algorithm.pc"
-  DESTINATION "${GR4_CMAKE_INSTALL_DIR}")
-
-install(TARGETS exprtk EXPORT ${GR4_EXPORT_NAME} ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+  TARGETS exprtk
+  EXPORT ${GR4_EXPORT_NAME}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(FILES $<TARGET_FILE:exprtk> DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(FILES third_party/exprtk.hpp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(DIRECTORY third_party/exprtk DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 
-install(EXPORT ${GR4_EXPORT_NAME} NAMESPACE gnuradio4:: DESTINATION "${GR4_CMAKE_INSTALL_DIR}")
+install(
+  EXPORT ${GR4_EXPORT_NAME}
+  NAMESPACE gnuradio4::
+  DESTINATION "${GR4_CMAKE_INSTALL_DIR}")
