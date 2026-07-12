@@ -183,6 +183,9 @@ template<typename T, typename TValue = gr::meta::fundamental_base_value_type_t<T
     if ((data.size() & 1UZ) == 0UZ) {
         // even-sized data, calculate the mean of the two middle elements
         auto midPrev = std::ranges::max_element(data.begin(), mid);
+        if (midPrev == mid) {
+            return static_cast<T>(*mid);
+        }
         return static_cast<T>(0.5) * (*midPrev + *mid);
     }
 
