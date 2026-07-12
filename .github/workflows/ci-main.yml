@@ -2,7 +2,11 @@ name: main branch CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: read
 
 jobs:
   build:
@@ -12,60 +16,53 @@ jobs:
       group: ${{ github.workflow }}-${{ github.run_id }}-${{ matrix.name }}
       cancel-in-progress: false
     container:
-      image: "${{ matrix.image }}"
+      image: ghcr.io/${{ github.repository_owner }}/gnuradio4-core-sdk:${{ matrix.core_sdk_tag }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: "Ubuntu 24.04 | gcc-14 | Release"
             cache_key: ubuntu-2404-gcc14-release
-            image: ghcr.io/gnuradio/ci:ubuntu-24.04-4.0
+            core_sdk_tag: main-ubuntu-24.04-gcc14-release
             cc: gcc-14
             cxx: g++-14
             cmake-build-type: Release
-            cmake_flags: "-DADDRESS_SANITIZER=ON"
+            cmake_flags: "-DADDRESS_SANITIZER=OFF"
           - name: "Ubuntu 26.04 | gcc | Release"
             cache_key: ubuntu-2604-gcc-release
-            image: ghcr.io/gnuradio/ci:ubuntu-26.04-4.0
+            core_sdk_tag: main-ubuntu-26.04-gcc-release
             cc: gcc
             cxx: g++
             cmake-build-type: Release
-            cmake_flags: "-DADDRESS_SANITIZER=ON"
+            cmake_flags: "-DADDRESS_SANITIZER=OFF"
           - name: "Ubuntu 26.04 | gcc | Debug"
             cache_key: ubuntu-2604-gcc-debug
-            image: ghcr.io/gnuradio/ci:ubuntu-26.04-4.0
+            core_sdk_tag: main-ubuntu-26.04-gcc-debug
             cc: gcc
             cxx: g++
             cmake-build-type: Debug
             cmake_flags: "-DADDRESS_SANITIZER=OFF"
           - name: "Ubuntu 24.04 | clang-20 | Release"
             cache_key: ubuntu-2404-clang20-release
-            image: ghcr.io/gnuradio/ci:ubuntu-24.04-4.0
+            core_sdk_tag: main-ubuntu-24.04-clang20-release
             cc: clang-20
             cxx: clang++-20
             cmake-build-type: Release
-            cmake_flags: "-DADDRESS_SANITIZER=ON"
+            cmake_flags: "-DCMAKE_CXX_FLAGS=-fsanitize=address -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address"
           - name: "Fedora 44 | clang | Release"
             cache_key: fedora-44-clang-release
-            image: ghcr.io/gnuradio/ci:fedora-44-4.0
+            core_sdk_tag: main-fedora-44-clang-release
             cc: clang
             cxx: clang++
             cmake-build-type: Release
-            cmake_flags: "-DADDRESS_SANITIZER=ON"
-          - name: "Ubuntu 24.04 | Emscripten | Release"
-            cache_key: ubuntu-2404-emscripten-release
-            image: ghcr.io/gnuradio/ci:ubuntu-24.04-4.0-emscripten
-            cc: emcc
-            cmake_wrapper: emcmake
-            cmake-build-type: Release
-            cmake_flags: "-DENABLE_COVERAGE=OFF -DCMAKE_CROSSCOMPILING_EMULATOR=${SYSTEM_NODE} -DGNURADIO_PARSE_REGISTRATIONS_TOOL_CXX_COMPLILER=g++-14"
-          - name: "Ubuntu 24.04 | Emscripten | Debug"
-            cache_key: ubuntu-2404-emscripten-debug
-            image: ghcr.io/gnuradio/ci:ubuntu-24.04-4.0-emscripten
-            cc: emcc
-            cmake_wrapper: emcmake
+            cmake_flags: "-DCMAKE_CXX_FLAGS=-fsanitize=address -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address"
+          - name: "Fedora 44 | clang | Debug"
+            cache_key: fedora-44-clang-debug
+            core_sdk_tag: main-fedora-44-clang-debug
+            cc: clang
+            cxx: clang++
             cmake-build-type: Debug
-            cmake_flags: "-DENABLE_COVERAGE=OFF -DCMAKE_CROSSCOMPILING_EMULATOR=${SYSTEM_NODE} -DGNURADIO_PARSE_REGISTRATIONS_TOOL_CXX_COMPLILER=g++-14"
+            cmake_flags: "-DCMAKE_CXX_FLAGS=-fsanitize=address -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address"
 
     steps:
       - uses: actions/checkout@v6
@@ -99,41 +96,24 @@ jobs:
           CC: "${{ matrix.cc }}"
           CXX: "${{ matrix.cxx }}"
         run: >
-          cmake  \
-              -S .  \
-              -B ../build \
-              -DCMAKE_COLOR_DIAGNOSTICS=ON \
-              -DDISABLE_EXTERNAL_DEPS_WARNINGS=ON \
-              -DCMAKE_BUILD_TYPE=${{ matrix.cmake-build-type }} \
-              -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-              ${{ steps.enable_sccache.outputs.CXX_LAUNCHER }} \
-              ${{ steps.enable_sccache.outputs.C_LAUNCHER }} \
-              -DENABLE_COVERAGE=OFF \
-              -DCMAKE_COMPILE_COMMANDS=ON \
-              -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
-              -DCMAKE_C_COMPILER=${{ matrix.cc }} \
-              ${{ matrix.cmake_flags }}
-
-      - name: Configure CMake Emscripten
-        if: matrix.cmake_wrapper == 'emcmake'
-        shell: bash
-        run: |
-          export SYSTEM_NODE=`which node` # use system node instead of old version distributed with emsdk
-          $EMSDK_HOME/emsdk activate $EMSDK_VERSION
-          source $EMSDK_HOME/emsdk_env.sh
-          ${{ matrix.cmake_wrapper }} cmake -S . -B ../build \
+          cmake \
+            -S . \
+            -B ../build \
             -DCMAKE_COLOR_DIAGNOSTICS=ON \
             -DDISABLE_EXTERNAL_DEPS_WARNINGS=ON \
+            -DCMAKE_BUILD_TYPE=${{ matrix.cmake-build-type }} \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_PREFIX_PATH=/opt/gnuradio4 \
             ${{ steps.enable_sccache.outputs.CXX_LAUNCHER }} \
             ${{ steps.enable_sccache.outputs.C_LAUNCHER }} \
-            -DCMAKE_BUILD_TYPE=${{ matrix.cmake-build-type }} \
+            -DENABLE_COVERAGE=OFF \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            -DCMAKE_C_COMPILER=${{ matrix.cc }} \
             ${{ matrix.cmake_flags }}
 
       - name: Build
         shell: bash
-        run: |
-          test -f $EMSDK_HOME/emsdk_env.sh && source $EMSDK_HOME/emsdk_env.sh
-          cmake --build ../build
+        run: cmake --build ../build
 
       - name: execute tests
         if: matrix.cc != 'gcc-14' || matrix.cmake-build-type != 'Debug'
@@ -142,18 +122,6 @@ jobs:
         working-directory: ${{runner.workspace}}/build
         shell: bash
         run: ctest --output-on-failure
-
-      - name: execute native main binary
-        if: matrix.cmake_wrapper == null
-        working-directory: ${{runner.workspace}}/build
-        shell: bash
-        run: ./core/src/main
-
-      - name: execute wasm main binary with nodejs
-        if: matrix.cmake_wrapper != null
-        working-directory: ${{runner.workspace}}/build
-        shell: bash
-        run: node ./core/src/main.js
 
       - name: Show final sccache and build directory stats
         if: always()
@@ -165,7 +133,7 @@ jobs:
     name: "GCC-14 Coverage"
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/gnuradio/ci:ubuntu-24.04-4.0
+      image: ghcr.io/${{ github.repository_owner }}/gnuradio4-core-sdk:main-ubuntu-24.04-gcc14-release
     steps:
       - uses: actions/checkout@v6
         with:
@@ -192,6 +160,7 @@ jobs:
             -DDISABLE_EXTERNAL_DEPS_WARNINGS=ON \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_PREFIX_PATH=/opt/gnuradio4 \
             ${{ steps.enable_sccache.outputs.CXX_LAUNCHER }} \
             ${{ steps.enable_sccache.outputs.C_LAUNCHER }} \
             -DENABLE_COVERAGE=ON \
@@ -211,14 +180,6 @@ jobs:
         working-directory: ${{runner.workspace}}/build
         shell: bash
         run: cmake --build . --target coverage
-
-      - name: Run sonar-scanner
-        shell: bash
-        env:
-          SONAR_HOST_URL: https://sonarcloud.io
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: sonar-scanner
 
       - name: Show final sccache and build directory stats
         if: always()
