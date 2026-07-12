@@ -177,19 +177,19 @@ template<typename T, typename TValue = gr::meta::fundamental_base_value_type_t<T
     }
 
     std::vector<T> data(values.begin(), values.end()); // temporary mutable copy for in-place partitioning
-    auto           mid = data.begin() + static_cast<std::ptrdiff_t>(data.size()) / 2;
+    const auto     midIndex = data.size() / 2UZ;
+    auto           mid      = data.begin() + static_cast<std::ptrdiff_t>(midIndex);
     std::ranges::nth_element(data, mid);
 
-    if ((data.size() & 1UZ) == 0UZ) {
-        // even-sized data, calculate the mean of the two middle elements
-        auto midPrev = std::ranges::max_element(data.begin(), mid);
-        if (midPrev == mid) {
-            return static_cast<T>(*mid);
-        }
-        return static_cast<T>(0.5) * (*midPrev + *mid);
+    if ((data.size() & 1UZ) != 0UZ) {
+        return static_cast<T>(data.at(midIndex)); // odd-sized data, return the middle element
     }
 
-    return static_cast<T>(*mid); // odd-sized data, return the middle element
+    // even-sized data, calculate the mean of the two middle elements
+    const auto lowerMidIndex = midIndex - 1UZ;
+    auto       lowerMid      = data.begin() + static_cast<std::ptrdiff_t>(lowerMidIndex);
+    std::ranges::nth_element(data.begin(), lowerMid, mid);
+    return static_cast<T>(0.5) * (data.at(lowerMidIndex) + data.at(midIndex));
 }
 
 template<typename T>
