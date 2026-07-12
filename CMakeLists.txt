@@ -113,6 +113,7 @@ if(NOT TARGET exprtk)
   set_target_properties(exprtk PROPERTIES POSITION_INDEPENDENT_CODE ON)
   target_include_directories(exprtk PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party>
                                            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+  target_compile_options(exprtk PRIVATE $<$<CXX_COMPILER_ID:GNU>:-Wno-null-dereference>)
 endif()
 if(NOT TARGET gnuradio4::exprtk)
   add_library(gnuradio4::exprtk ALIAS exprtk)

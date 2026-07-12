@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <numbers>
 #include <vector>
 
@@ -26,16 +27,8 @@ auto computeMagnitudeSpectrum(const TContainerIn& fftIn, TContainerOut&& magOut 
     }
 
     const std::size_t magSize = config.computeHalfSpectrum ? (N / 2UZ) : N;
-    if constexpr (requires(std::size_t n) { magOut.resize(n); }) {
-        if (magOut.size() != magSize) {
-            magOut.resize(magSize);
-        }
-    } else {
-        static_assert(std::tuple_size_v<TContainerIn> == std::tuple_size_v<TContainerOut>, "Size mismatch for fixed-size container.");
-    }
-
-    using PrecisionType = typename T::value_type;
-    std::transform(fftIn.begin(), std::next(fftIn.begin(), static_cast<std::ptrdiff_t>(magSize)), magOut.begin(), [N, outputInDb = config.outputInDb](const auto& c) {
+    using PrecisionType       = typename T::value_type;
+    auto computeMagnitude     = [N, outputInDb = config.outputInDb](const auto& c) {
         const auto mag{std::hypot(c.real(), c.imag()) * PrecisionType(2.) / static_cast<PrecisionType>(N)};
         if (outputInDb && mag > PrecisionType(0)) { // avoids log of zero
             return PrecisionType(20.) * std::log10(mag);
@@ -43,7 +36,19 @@ auto computeMagnitudeSpectrum(const TContainerIn& fftIn, TContainerOut&& magOut 
             return std::numeric_limits<PrecisionType>::lowest(); // represents -infinity in dB
         }
         return mag;
-    });
+    };
+
+    if constexpr (requires(std::size_t n) {
+                      magOut.clear();
+                      magOut.reserve(n);
+                  }) {
+        magOut.clear();
+        magOut.reserve(magSize);
+        std::transform(fftIn.begin(), std::next(fftIn.begin(), static_cast<std::ptrdiff_t>(magSize)), std::back_inserter(magOut), computeMagnitude);
+    } else {
+        static_assert(std::tuple_size_v<TContainerIn> == std::tuple_size_v<TContainerOut>, "Size mismatch for fixed-size container.");
+        std::transform(fftIn.begin(), std::next(fftIn.begin(), static_cast<std::ptrdiff_t>(magSize)), magOut.begin(), computeMagnitude);
+    }
 
     if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
         if (!config.computeHalfSpectrum && config.shiftSpectrum) {
@@ -71,6 +76,10 @@ struct ConfigPhase {
 template<std::ranges::input_range TContainerInOut, typename T = TContainerInOut::value_type>
 requires(std::floating_point<T>)
 void unwrapPhase(TContainerInOut& phase) {
+    if (std::ranges::empty(phase)) {
+        return;
+    }
+
     const auto pi   = std::numbers::pi_v<T>;
     auto       prev = phase.front();
     std::transform(phase.begin() + 1, phase.end(), phase.begin() + 1, [&prev, pi](T& current) {
@@ -96,15 +105,19 @@ auto computePhaseSpectrum(const TContainerIn& fftIn, TContainerOut&& phaseOut = 
         throw std::invalid_argument("fftIn cannot be empty.");
     }
 
-    std::size_t phaseSize = config.computeHalfSpectrum ? (N / 2) : N;
-    if constexpr (requires(std::size_t n) { phaseOut.resize(n); }) {
-        if (phaseOut.size() != phaseSize) {
-            phaseOut.resize(phaseSize);
-        }
+    std::size_t phaseSize    = config.computeHalfSpectrum ? (N / 2) : N;
+    auto        computePhase = [](const auto& c) { return std::atan2(c.imag(), c.real()); };
+    if constexpr (requires(std::size_t n) {
+                      phaseOut.clear();
+                      phaseOut.reserve(n);
+                  }) {
+        phaseOut.clear();
+        phaseOut.reserve(phaseSize);
+        std::transform(fftIn.begin(), std::next(fftIn.begin(), static_cast<std::ptrdiff_t>(phaseSize)), std::back_inserter(phaseOut), computePhase);
     } else {
         static_assert(std::tuple_size_v<TContainerIn> == std::tuple_size_v<TContainerOut>, "Size mismatch for fixed-size container.");
+        std::transform(fftIn.begin(), std::next(fftIn.begin(), static_cast<std::ptrdiff_t>(phaseSize)), phaseOut.begin(), computePhase);
     }
-    std::transform(fftIn.begin(), std::next(fftIn.begin(), static_cast<std::ptrdiff_t>(phaseOut.size())), phaseOut.begin(), [](const auto& c) { return std::atan2(c.imag(), c.real()); });
 
     if (config.unwrapPhase) {
         unwrapPhase(phaseOut);

@@ -3,6 +3,7 @@ target_link_libraries(exprtk_example0 PRIVATE gnuradio-core exprtk)
 
 add_executable(exprtk_example1 exprtk_example1.cpp)
 target_link_libraries(exprtk_example1 PRIVATE gnuradio-core exprtk)
+target_compile_options(exprtk_example1 PRIVATE $<$<CXX_COMPILER_ID:GNU>:-Wno-null-dereference>)
 
 add_executable(exprtk_example2 exprtk_example2.cpp)
 target_link_libraries(exprtk_example2 PRIVATE gnuradio-core exprtk)
