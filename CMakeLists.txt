@@ -17,6 +17,7 @@ find_package(PkgConfig QUIET)
 
 option(ENABLE_EXAMPLES "Enable example builds" ON)
 option(ENABLE_TESTING "Enable test builds" ON)
+option(ENABLE_COVERAGE "Enable coverage target generation" OFF)
 option(GR_USE_FETCHCONTENT_DEPS "Allow CMake to download selected third-party dependencies with FetchContent" OFF)
 option(USE_CCACHE "Use ccache if available" ON)
 set(GR_HTTP_ENABLED OFF)
@@ -132,6 +133,71 @@ endif()
 
 add_subdirectory(bench)
 add_subdirectory(algorithm)
+
+if(ENABLE_TESTING
+   AND (UNIX
+        OR APPLE
+        OR WIN32)
+   AND ENABLE_COVERAGE)
+  message("Coverage reporting enabled")
+  include(cmake/CodeCoverage.cmake)
+  append_coverage_compiler_flags()
+  set(GCOVR_ADDITIONAL_ARGS "--merge-mode-functions=merge-use-line-min"
+                            "--gcov-ignore-parse-errors=negative_hits.warn_once_per_file")
+  set(GR4_LIBRARY_COVERAGE_DEPENDENCIES
+      qa_Xoshiro256pp
+      qa_GaussianNoise
+      qa_NoiseGenerator
+      qa_ToneGenerator
+      qa_SignalGeneratorCore
+      qa_algorithm_fourier
+      qa_DataSetEstimators
+      qa_FilterTool
+      qa_ImCanvas
+      qa_ImChart
+      qa_ImGraph
+      qa_SchmittTrigger
+      qa_SimdFFT
+      qa_SvdFilter
+      qa_SavitzkyGolay
+      qa_SampleRateEstimator
+      qa_BurstTaper
+      qa_FileIo
+      qa_FileIoHelpers)
+  foreach(target_name IN LISTS GR4_LIBRARY_COVERAGE_DEPENDENCIES)
+    if(TARGET ${target_name})
+      target_compile_options(
+        ${target_name}
+        PRIVATE --coverage
+                -Og
+                -g1
+                -gz)
+      target_link_options(${target_name} PRIVATE --coverage)
+    endif()
+  endforeach()
+  setup_target_for_coverage_gcovr_xml(
+    NAME
+    coverage
+    EXECUTABLE
+    ctest
+    EXECUTABLE_ARGS
+    "--output-on-failure"
+    DEPENDENCIES
+    ${GR4_LIBRARY_COVERAGE_DEPENDENCIES}
+    EXCLUDE
+    "${CMAKE_BINARY_DIR}/*")
+  setup_target_for_coverage_gcovr_html(
+    NAME
+    coverage_html
+    EXECUTABLE
+    ctest
+    EXECUTABLE_ARGS
+    "--output-on-failure"
+    DEPENDENCIES
+    ${GR4_LIBRARY_COVERAGE_DEPENDENCIES}
+    EXCLUDE
+    "${CMAKE_BINARY_DIR}/*")
+endif()
 
 configure_package_config_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/gnuradio4LibraryConfig.cmake.in"
