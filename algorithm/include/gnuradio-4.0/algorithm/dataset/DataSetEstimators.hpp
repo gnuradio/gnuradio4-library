@@ -478,7 +478,7 @@ template<MetaInfo mode = MetaInfo::Apply, DataSetLike D, typename T = typename s
         property_map        data            = property_map{                                                                                                 //
             {gr::tag::TRIGGER_NAME.shortKey(), std::format("{}_EDGE_LEVEL_{}", isRising ? "RISING" : "FALLING", threshold)},              //
             {gr::tag::TRIGGER_TIME.shortKey(), time}, {"trigger_time_error", timeUncertainty}, {gr::tag::TRIGGER_OFFSET.shortKey(), 0.f}, //
-            {gr::tag::CONTEXT.shortKey(), context}};
+            {gr::tag::CONTEXT_KEY.shortKey(), context}};
         dataSet.timing_events[signalIndex].push_back({idx, std::move(data)});
     }
     return value;
@@ -549,7 +549,7 @@ std::optional<StepStartDetectionResult<T>> detectStepStart(D& ds, TValue thresho
         const std::uint64_t timeUncertainty = 0UZ;
         property_map        data            = property_map{{gr::tag::TRIGGER_NAME.shortKey(), std::format("{}_EDGE_LEVEL_{}", isRising ? "RISING" : "FALLING", threshold)}, //
                               {gr::tag::TRIGGER_TIME.shortKey(), time}, {"trigger_time_error", timeUncertainty}, {gr::tag::TRIGGER_OFFSET.shortKey(), 0.f},                 //
-                              {gr::tag::CONTEXT.shortKey(), context}};
+                              {gr::tag::CONTEXT_KEY.shortKey(), context}};
         ds.timing_events[signalIndex].push_back({index, std::move(data)});
     }
     return StepStartDetectionResult<T>{.index = index, .initialValue = initial, .minValue = min_val, .maxValue = max_val, .isRising = isRising};
@@ -607,7 +607,7 @@ template<MetaInfo mode = MetaInfo::Apply, DataSetLike D, typename T = typename s
         const std::uint64_t timeUncertainty = 0UZ;
         property_map        data            = property_map{{gr::tag::TRIGGER_NAME.shortKey(), "SETTLING_TIME"}, {"gr:settling_level", gr::value(settlingLevel)}, //
                               {gr::tag::TRIGGER_TIME.shortKey(), time}, {"trigger_time_error", timeUncertainty}, {gr::tag::TRIGGER_OFFSET.shortKey(), 0.f},      //
-                              {gr::tag::CONTEXT.shortKey(), context}};
+                              {gr::tag::CONTEXT_KEY.shortKey(), context}};
         dataSet.timing_events[signalIndex].push_back({idx, std::move(data)});
     }
 
