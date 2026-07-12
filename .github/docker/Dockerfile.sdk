@@ -1,36 +1,49 @@
-FROM ghcr.io/gnuradio/ci:ubuntu-26.04-4.0 AS builder
+ARG CORE_SDK_OWNER=gnuradio
+ARG CORE_SDK_TAG=main-ubuntu-26.04-gcc-release
+
+FROM ghcr.io/${CORE_SDK_OWNER}/gnuradio4-core-sdk:${CORE_SDK_TAG} AS builder
 
 ARG GIT_SHA=unknown
+ARG REPOSITORY_URL=https://github.com/gnuradio/gnuradio4-library
+ARG CORE_SDK_OWNER=gnuradio
+ARG CORE_SDK_TAG=main-ubuntu-26.04-gcc-release
+ARG CMAKE_BUILD_TYPE=RelWithDebInfo
+ARG CMAKE_FLAGS="-DADDRESS_SANITIZER=OFF"
+ARG CC=gcc
+ARG CXX=g++
 
-WORKDIR /src/gnuradio4
+WORKDIR /src/gnuradio4-library
 COPY . .
 
-ENV CC=gcc \
-    CXX=g++ \
+ENV CC=${CC} \
+    CXX=${CXX} \
     CMAKE_EXPORT_COMPILE_COMMANDS=ON
 
-RUN cmake -S . -B /build/gnuradio4 \
+RUN cmake -S . -B /build/gnuradio4-library \
       -DCMAKE_COLOR_DIAGNOSTICS=ON \
       -DDISABLE_EXTERNAL_DEPS_WARNINGS=ON \
-      -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DCMAKE_PREFIX_PATH=/opt/gnuradio4 \
+      -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
       -DCMAKE_INSTALL_PREFIX=/opt/gnuradio4 \
       -DUSE_CCACHE=OFF \
       -DENABLE_EXAMPLES=OFF \
       -DENABLE_TESTING=OFF \
-      -DENABLE_COVERAGE=OFF \
-      -DADDRESS_SANITIZER=OFF \
-    && cmake --build /build/gnuradio4 --parallel \
-    && cmake --install /build/gnuradio4 \
-    && mkdir -p /opt/gnuradio4/share/gnuradio4-sdk \
-    && printf 'git_sha=%s\nprefix=/opt/gnuradio4\n' "${GIT_SHA}" > /opt/gnuradio4/share/gnuradio4-sdk/manifest
+      ${CMAKE_FLAGS} \
+    && cmake --build /build/gnuradio4-library --parallel \
+    && cmake --install /build/gnuradio4-library \
+    && mkdir -p /opt/gnuradio4/share/gnuradio4-library-sdk \
+    && printf 'git_sha=%s\nprefix=/opt/gnuradio4\ncore_sdk_image=%s\ncmake_build_type=%s\ncmake_flags=%s\n' \
+      "${GIT_SHA}" "ghcr.io/${CORE_SDK_OWNER}/gnuradio4-core-sdk:${CORE_SDK_TAG}" "${CMAKE_BUILD_TYPE}" "${CMAKE_FLAGS}" \
+      > /opt/gnuradio4/share/gnuradio4-library-sdk/manifest
 
-FROM ghcr.io/gnuradio/ci:ubuntu-26.04-4.0 AS sdk
+FROM ghcr.io/${CORE_SDK_OWNER}/gnuradio4-core-sdk:${CORE_SDK_TAG} AS sdk
 
 ARG GIT_SHA=unknown
+ARG REPOSITORY_URL=https://github.com/gnuradio/gnuradio4-library
 
-LABEL org.opencontainers.image.source="https://github.com/gnuradio/gnuradio4" \
+LABEL org.opencontainers.image.source="${REPOSITORY_URL}" \
       org.opencontainers.image.revision="${GIT_SHA}" \
-      org.opencontainers.image.description="GNU Radio 4 SDK image for downstream out-of-tree module builds" \
+      org.opencontainers.image.description="GNU Radio 4 library SDK image with core and library installed" \
       org.opencontainers.image.licenses="MIT"
 
 COPY --from=builder /opt/gnuradio4 /opt/gnuradio4

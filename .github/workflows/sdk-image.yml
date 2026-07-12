@@ -2,7 +2,7 @@ name: SDK image
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -10,13 +10,59 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/gnuradio/gnuradio4-sdk
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/gnuradio4-library-sdk
 
 jobs:
   publish:
-    name: Build and publish SDK image
+    name: "${{ matrix.name }}"
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu 24.04 | gcc-14 | Release
+            tag_suffix: ubuntu-24.04-gcc14-release
+            core_sdk_tag: main-ubuntu-24.04-gcc14-release
+            cc: gcc-14
+            cxx: g++-14
+            cmake_build_type: RelWithDebInfo
+            cmake_flags: -DADDRESS_SANITIZER=OFF
+          - name: Ubuntu 26.04 | gcc | Release
+            tag_suffix: ubuntu-26.04-gcc-release
+            core_sdk_tag: main-ubuntu-26.04-gcc-release
+            cc: gcc
+            cxx: g++
+            cmake_build_type: RelWithDebInfo
+            cmake_flags: -DADDRESS_SANITIZER=OFF
+          - name: Ubuntu 26.04 | gcc | Debug
+            tag_suffix: ubuntu-26.04-gcc-debug
+            core_sdk_tag: main-ubuntu-26.04-gcc-debug
+            cc: gcc
+            cxx: g++
+            cmake_build_type: Debug
+            cmake_flags: -DADDRESS_SANITIZER=OFF
+          - name: Ubuntu 24.04 | clang-20 | Release
+            tag_suffix: ubuntu-24.04-clang20-release
+            core_sdk_tag: main-ubuntu-24.04-clang20-release
+            cc: clang-20
+            cxx: clang++-20
+            cmake_build_type: RelWithDebInfo
+            cmake_flags: "-DCMAKE_CXX_FLAGS=-fsanitize=address -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address"
+          - name: Fedora 44 | clang | Release
+            tag_suffix: fedora-44-clang-release
+            core_sdk_tag: main-fedora-44-clang-release
+            cc: clang
+            cxx: clang++
+            cmake_build_type: RelWithDebInfo
+            cmake_flags: "-DCMAKE_CXX_FLAGS=-fsanitize=address -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address"
+          - name: Fedora 44 | clang | Debug
+            tag_suffix: fedora-44-clang-debug
+            core_sdk_tag: main-fedora-44-clang-debug
+            cc: clang
+            cxx: clang++
+            cmake_build_type: Debug
+            cmake_flags: "-DCMAKE_CXX_FLAGS=-fsanitize=address -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address"
 
     steps:
       - uses: actions/checkout@v6
@@ -41,22 +87,32 @@ jobs:
           push: true
           build-args: |
             GIT_SHA=${{ github.sha }}
+            CORE_SDK_OWNER=${{ github.repository_owner }}
+            CORE_SDK_TAG=${{ matrix.core_sdk_tag }}
+            REPOSITORY_URL=https://github.com/${{ github.repository }}
+            CC=${{ matrix.cc }}
+            CXX=${{ matrix.cxx }}
+            CMAKE_BUILD_TYPE=${{ matrix.cmake_build_type }}
+            CMAKE_FLAGS=${{ matrix.cmake_flags }}
           tags: |
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.IMAGE_NAME }}:main
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}-${{ matrix.tag_suffix }}
+            ${{ env.IMAGE_NAME }}:main-${{ matrix.tag_suffix }}
           labels: |
-            org.opencontainers.image.source=https://github.com/gnuradio/gnuradio4
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.description=GNU Radio 4 SDK image for downstream out-of-tree module builds
+            org.opencontainers.image.description=GNU Radio 4 library SDK image with core and library installed
             org.opencontainers.image.licenses=MIT
 
       - name: Validate SDK image contents
         shell: bash
         run: |
-          docker run --rm "${IMAGE_NAME}:${GITHUB_SHA}" bash -lc '
+          docker run --rm "${IMAGE_NAME}:${GITHUB_SHA}-${{ matrix.tag_suffix }}" bash -lc '
             set -euo pipefail
             printf "GNURADIO4_PREFIX=%s\n" "${GNURADIO4_PREFIX}"
             test -d /opt/gnuradio4
+            test -f /opt/gnuradio4/share/gnuradio4-core-sdk/manifest
+            test -f /opt/gnuradio4/share/gnuradio4-library-sdk/manifest
+            cat /opt/gnuradio4/share/gnuradio4-library-sdk/manifest
             ls -la /opt/gnuradio4
             if [ -d /opt/gnuradio4/lib ]; then
               ls -la /opt/gnuradio4/lib
@@ -64,5 +120,6 @@ jobs:
             if [ -d /opt/gnuradio4/lib64 ]; then
               ls -la /opt/gnuradio4/lib64
             fi
-            find /opt/gnuradio4 -path "*/cmake/*" \( -name "*Config.cmake" -o -name "*Targets.cmake" \) -print -quit | grep .
+            find /opt/gnuradio4 -path "*/cmake/*" -name "gnuradio4Config.cmake" -print -quit | grep .
+            find /opt/gnuradio4 -path "*/cmake/*" -name "gnuradio4LibraryConfig.cmake" -print -quit | grep .
           '
