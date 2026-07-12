@@ -141,6 +141,8 @@ if(ENABLE_TESTING
   append_coverage_compiler_flags()
   set(GCOVR_ADDITIONAL_ARGS "--merge-mode-functions=merge-use-line-min"
                             "--gcov-ignore-parse-errors=negative_hits.warn_once_per_file")
+  set(GR4_LIBRARY_COVERAGE_EXCLUDES "${CMAKE_BINARY_DIR}/*" "${CMAKE_SOURCE_DIR}/third_party/*"
+                                    "${CMAKE_BINARY_DIR}/_deps/*")
 endif()
 
 add_subdirectory(bench)
@@ -181,7 +183,7 @@ if(ENABLE_TESTING
     DEPENDENCIES
     ${GR4_LIBRARY_COVERAGE_DEPENDENCIES}
     EXCLUDE
-    "${CMAKE_BINARY_DIR}/*")
+    ${GR4_LIBRARY_COVERAGE_EXCLUDES})
   setup_target_for_coverage_gcovr_html(
     NAME
     coverage_html
@@ -192,7 +194,7 @@ if(ENABLE_TESTING
     DEPENDENCIES
     ${GR4_LIBRARY_COVERAGE_DEPENDENCIES}
     EXCLUDE
-    "${CMAKE_BINARY_DIR}/*")
+    ${GR4_LIBRARY_COVERAGE_EXCLUDES})
 endif()
 
 configure_package_config_file(
