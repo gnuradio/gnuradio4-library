@@ -7,7 +7,7 @@
 #include <gnuradio-4.0/Block.hpp>
 #include <gnuradio-4.0/algorithm/fileio/FileIo.hpp>
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && defined(GR_HTTP_ENABLED)
 #include <httplib.h>
 #endif
 
