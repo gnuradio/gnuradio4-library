@@ -21,6 +21,8 @@ option(ENABLE_COVERAGE "Enable coverage target generation" OFF)
 option(GR_USE_FETCHCONTENT_DEPS "Allow CMake to download selected third-party dependencies with FetchContent" OFF)
 option(USE_CCACHE "Use ccache if available" ON)
 set(GR_HTTP_ENABLED OFF)
+option(GR4_USE_PRECOMPILE_HEADERS "Use precompiled headers for faster test compilation" OFF)
+mark_as_advanced(GR4_USE_PRECOMPILE_HEADERS)
 
 find_program(CCACHE_PROGRAM ccache)
 if(CCACHE_PROGRAM AND USE_CCACHE)
