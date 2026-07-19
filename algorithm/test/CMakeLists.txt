@@ -15,16 +15,18 @@ add_ut_test(qa_SvdFilter)
 add_ut_test(qa_SavitzkyGolay)
 add_ut_test(qa_SampleRateEstimator)
 add_ut_test(qa_BurstTaper)
-add_ut_test(qa_FileIo)
 add_ut_test(qa_FileIoHelpers)
 
-if(EMSCRIPTEN)
-  # Simple HTTP server used only for unit tests.
-  target_link_options(
-    qa_FileIo
-    PRIVATE
-    --pre-js=${CMAKE_CURRENT_SOURCE_DIR}/fileio_pre.js
-    --emrun)
+if(GR_HTTP_ENABLED)
+  add_ut_test(qa_FileIo)
+  if(EMSCRIPTEN)
+    # Simple HTTP server used only for unit tests.
+    target_link_options(
+      qa_FileIo
+      PRIVATE
+      --pre-js=${CMAKE_CURRENT_SOURCE_DIR}/fileio_pre.js
+      --emrun)
+  endif()
 endif()
 
 if(EMSCRIPTEN)
@@ -49,7 +51,9 @@ target_link_libraries(qa_SvdFilter PRIVATE gnuradio-algorithm)
 target_link_libraries(qa_SavitzkyGolay PRIVATE gnuradio-algorithm)
 target_link_libraries(qa_SampleRateEstimator PRIVATE gnuradio-algorithm)
 target_link_libraries(qa_BurstTaper PRIVATE gnuradio-algorithm)
-target_link_libraries(qa_FileIo PRIVATE gnuradio-algorithm httplib::httplib)
+if(GR_HTTP_ENABLED)
+  target_link_libraries(qa_FileIo PRIVATE gnuradio-algorithm httplib::httplib)
+endif()
 target_link_libraries(qa_FileIoHelpers PRIVATE gnuradio-algorithm)
 
 add_executable(example_ImChart example_ImChart.cpp)
