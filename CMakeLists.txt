@@ -18,6 +18,7 @@ find_package(PkgConfig QUIET)
 option(ENABLE_EXAMPLES "Enable example builds" ON)
 option(ENABLE_TESTING "Enable test builds" ON)
 option(ENABLE_COVERAGE "Enable coverage target generation" OFF)
+option(WARNINGS_AS_ERRORS "Enable -Werror flags" ON)
 option(GR_USE_FETCHCONTENT_DEPS "Allow CMake to download selected third-party dependencies with FetchContent" OFF)
 option(USE_CCACHE "Use ccache if available" ON)
 set(GR_HTTP_ENABLED OFF)
@@ -56,8 +57,17 @@ find_package(gnuradio4 CONFIG REQUIRED)
 if(NOT TARGET gnuradio-core AND TARGET gnuradio4::gnuradio-core)
   add_library(gnuradio-core ALIAS gnuradio4::gnuradio-core)
 endif()
+# the installed gnuradio4::gnuradio-options keeps its warning battery behind $<BUILD_INTERFACE:...>, so recreate one on
+# a local wrapper target to compile this project's own targets with -Wall/-Werror & co. The battery sits on an interface
+# target of its own, listed after the imported one, because a target's own options precede the ones it inherits: carried
+# directly on the wrapper, a local suppression would land ahead of the flags an SDK built from an older core still
+# exports, and have no effect.
 if(NOT TARGET gnuradio-options AND TARGET gnuradio4::gnuradio-options)
-  add_library(gnuradio-options ALIAS gnuradio4::gnuradio-options)
+  include(cmake/CompilerWarnings.cmake)
+  add_library(gnuradio-library-warnings INTERFACE)
+  set_project_warnings(gnuradio-library-warnings)
+  add_library(gnuradio-options INTERFACE)
+  target_link_libraries(gnuradio-options INTERFACE gnuradio4::gnuradio-options gnuradio-library-warnings)
 endif()
 if(NOT TARGET gnuradio-blocklib-core AND TARGET gnuradio4::gnuradio-blocklib-core)
   add_library(gnuradio-blocklib-core ALIAS gnuradio4::gnuradio-blocklib-core)
