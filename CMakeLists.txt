@@ -22,10 +22,23 @@ option(GR_USE_FETCHCONTENT_DEPS "Allow CMake to download selected third-party de
 option(USE_CCACHE "Use ccache if available" ON)
 set(GR_HTTP_ENABLED OFF)
 
+# limit parallel compile/link jobs to prevent OOM with template-heavy TUs, override with -DGR_BUILD_PARALLEL_LEVEL=<N>
+# (mirrors gnuradio4-core; CI with more RAM can raise this)
+set(GR_BUILD_PARALLEL_LEVEL
+    "6"
+    CACHE STRING "Maximum parallel compile/link jobs")
+if(CMAKE_GENERATOR MATCHES "Ninja")
+  set_property(GLOBAL APPEND PROPERTY JOB_POOLS compile_pool=${GR_BUILD_PARALLEL_LEVEL} link_pool=2)
+  set(CMAKE_JOB_POOL_COMPILE compile_pool)
+  set(CMAKE_JOB_POOL_LINK link_pool)
+endif()
+
 find_program(CCACHE_PROGRAM ccache)
 if(CCACHE_PROGRAM AND USE_CCACHE)
   message(STATUS "ccache found and will be used")
   set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM}")
+elseif(USE_CCACHE)
+  message(WARNING "USE_CCACHE is ON but ccache was not found on PATH — builds will not be cached")
 else()
   message(STATUS "ccache will not be used")
 endif()
