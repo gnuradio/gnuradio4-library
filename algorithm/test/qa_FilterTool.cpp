@@ -775,10 +775,10 @@ const boost::ut::suite<"IIR & FIR Benchmarks"> filterBenchmarks = [] {
 
         magnitudeChart.draw();
 
-        const auto phaseResponse = [&frequencies, &kFilterParameter](auto& filter, double corr = 0UZ, double offset = 0.) {
-            const auto groupDelay = (corr + static_cast<double>(countFilterCoefficients(filter)) - 1.0) / 2.0 / kFilterParameter.fs; // just a coarse estimate
+        const auto phaseResponse = [&frequencies, fs = kFilterParameter.fs](auto& filter, double corr = 0UZ, double offset = 0.) {
+            const auto groupDelay = (corr + static_cast<double>(countFilterCoefficients(filter)) - 1.0) / 2.0 / fs; // just a coarse estimate
 
-            auto normalisedPhase = calculateFrequencyResponse<PhaseDegrees>(frequencies, kFilterParameter.fs, filter);
+            auto normalisedPhase = calculateFrequencyResponse<PhaseDegrees>(frequencies, fs, filter);
             std::transform(normalisedPhase.begin(), normalisedPhase.end(), frequencies.begin(), normalisedPhase.begin(),                                        //
                 [groupDelay, offset](auto phase, auto frequency) { return std::fmod(offset + phase + groupDelay * frequency * 360.0 + 180.0, 360.) - 180.0; }); // [-180°, 180°]
             return normalisedPhase;
