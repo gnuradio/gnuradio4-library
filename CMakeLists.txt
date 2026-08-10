@@ -59,21 +59,23 @@ if(NOT TARGET magic_enum AND TARGET gnuradio4::magic_enum)
   add_library(magic_enum ALIAS gnuradio4::magic_enum)
 endif()
 
-find_package(httplib CONFIG QUIET)
-if(NOT TARGET httplib::httplib)
-  pkg_search_module(
-    CPP_HTTPLIB
-    QUIET
-    IMPORTED_TARGET
-    cpp-httplib
-    httplib)
-  if(CPP_HTTPLIB_FOUND)
-    add_library(httplib::httplib INTERFACE IMPORTED)
-    target_link_libraries(httplib::httplib INTERFACE PkgConfig::CPP_HTTPLIB)
+if(NOT EMSCRIPTEN)
+  find_package(httplib CONFIG QUIET)
+  if(NOT TARGET httplib::httplib)
+    pkg_search_module(
+      CPP_HTTPLIB
+      QUIET
+      IMPORTED_TARGET
+      cpp-httplib
+      httplib)
+    if(CPP_HTTPLIB_FOUND)
+      add_library(httplib::httplib INTERFACE IMPORTED)
+      target_link_libraries(httplib::httplib INTERFACE PkgConfig::CPP_HTTPLIB)
+    endif()
   endif()
-endif()
-if(NOT TARGET httplib::httplib)
-  message(FATAL_ERROR "cpp-httplib is required to build the algorithm tests.")
+  if(NOT TARGET httplib::httplib)
+    message(FATAL_ERROR "cpp-httplib is required to build the algorithm tests.")
+  endif()
 endif()
 
 set(BOOST_UT_DISABLE_MODULE
