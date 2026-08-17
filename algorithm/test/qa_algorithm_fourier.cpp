@@ -120,15 +120,17 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
 
             const auto signal{generateSinSample<typename T::InType>(t.N, t.sample_rate, t.frequency, t.amplitude)};
             auto       fftResult         = fftAlgo.compute(signal);
-            auto       magnitudeSpectrum = gr::algorithm::fft::computeMagnitudeSpectrum(fftResult);
+            auto       magnitudeSpectrum = gr::algorithm::fft::computeMagnitudeSpectrum(fftResult, {.computeHalfSpectrum = true});
+            auto       fullSpectrum      = gr::algorithm::fft::computeMagnitudeSpectrum(fftResult);
             auto       phase             = gr::algorithm::fft::computePhaseSpectrum(fftResult, {.outputInDeg = true, .unwrapPhase = true});
-            const auto peakIndex{static_cast<std::size_t>(std::distance(magnitudeSpectrum.begin(), std::max_element(magnitudeSpectrum.begin(), std::next(magnitudeSpectrum.begin(), static_cast<std::ptrdiff_t>(t.N / 2u)))))}; // only positive frequencies from FFT
+            const auto peakIndex{static_cast<std::size_t>(std::distance(magnitudeSpectrum.begin(), std::ranges::max_element(magnitudeSpectrum)))};
             const auto peakAmplitude = magnitudeSpectrum[peakIndex];
             const auto peakFrequency{static_cast<double>(peakIndex) * t.sample_rate / static_cast<double>(t.N)};
 
             const auto expectedAmplitude = t.outputInDb ? 20. * log10(std::abs(t.amplitude)) : t.amplitude;
             expect(approx(static_cast<double>(peakAmplitude), expectedAmplitude, tolerance)) << std::format("{} equal amplitude", type_name<T>());
             expect(approx(peakFrequency, t.frequency, tolerance)) << std::format("{} equal frequency", type_name<T>());
+            expect(approx(static_cast<double>(fullSpectrum[peakIndex]), expectedAmplitude / 2., tolerance)) << std::format("{} full spectrum splits the amplitude over the mirrored pair", type_name<T>());
         }
     } | AllTypesToTest{};
 
@@ -151,20 +153,20 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
             } else if (iT == 1) {
                 std::ranges::fill(signal.begin(), signal.end(), InType(1., 0.));
                 expectedFft0          = {16., 0.};
-                expectedPeakAmplitude = 2.;
+                expectedPeakAmplitude = 1.;
             } else if (iT == 2) {
                 std::ranges::fill(signal.begin(), signal.end(), InType(1., 1.));
                 expectedFft0          = {16., 16.};
-                expectedPeakAmplitude = std::sqrt(8.);
+                expectedPeakAmplitude = std::sqrt(2.);
             } else if (iT == 3) {
                 std::iota(signal.begin(), signal.end(), 1);
                 expectedFft0          = {136., 0.};
-                expectedPeakAmplitude = 17.;
+                expectedPeakAmplitude = 8.5;
             } else if (iT == 4) {
                 int i = 0;
                 std::ranges::generate(signal.begin(), signal.end(), [&i] { return InType(static_cast<typename InType::value_type>(i++ % 2), 0.); });
                 expectedFft0          = {8., 0.};
-                expectedPeakAmplitude = 1.;
+                expectedPeakAmplitude = 0.5;
             }
 
             auto fftResult         = fftAlgo.compute(signal);
@@ -196,6 +198,39 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
             expect(lt(relativeL2Error(result, reference), tolerance)) << std::format("<{}> n={} relative L2 error {}", type_name<T>(), n, relativeL2Error(result, reference));
         }
     } | ComplexTypesToTest{};
+
+    // amplitude scaling: 1/N over the full spectrum, 2/N over the half spectrum except at DC and Nyquist
+    "magnitude spectrum scaling"_test = []<typename TVal>() {
+        using Cplx                               = std::complex<TVal>;
+        constexpr std::size_t          N         = 64UZ;
+        constexpr double               tolerance = 1.e-5;
+        gr::algorithm::FFT<Cplx, Cplx> fftAlgo{};
+
+        for (const std::size_t bin : {0UZ, 1UZ, 7UZ, 32UZ}) {
+            std::vector<Cplx> signal(N);
+            for (std::size_t i = 0; i < N; ++i) {
+                const double angle = 2. * std::numbers::pi * static_cast<double>((bin * i) % N) / static_cast<double>(N);
+                signal[i]          = Cplx(static_cast<TVal>(std::cos(angle)), static_cast<TVal>(std::sin(angle)));
+            }
+            const auto full = gr::algorithm::fft::computeMagnitudeSpectrum(fftAlgo.compute(signal));
+            expect(approx(static_cast<double>(full[bin]), 1., tolerance)) << std::format("<{}> unit complex exponential at bin {}", type_name<TVal>(), bin);
+        }
+
+        constexpr double      amplitude = 3.;
+        constexpr std::size_t cosineBin = 5UZ;
+        std::vector<Cplx>     cosine(N);
+        for (std::size_t i = 0; i < N; ++i) {
+            cosine[i] = Cplx(static_cast<TVal>(amplitude * std::cos(2. * std::numbers::pi * static_cast<double>(cosineBin * i) / static_cast<double>(N))), TVal(0));
+        }
+        const auto cosineSpectrum = fftAlgo.compute(cosine);
+        expect(approx(static_cast<double>(gr::algorithm::fft::computeMagnitudeSpectrum(cosineSpectrum, {.computeHalfSpectrum = true})[cosineBin]), amplitude, tolerance)) << std::format("<{}> real cosine, half spectrum", type_name<TVal>());
+        expect(approx(static_cast<double>(gr::algorithm::fft::computeMagnitudeSpectrum(cosineSpectrum)[cosineBin]), amplitude / 2., tolerance)) << std::format("<{}> real cosine, full spectrum", type_name<TVal>());
+
+        const std::vector<Cplx> dc(N, Cplx(TVal(2), TVal(0)));
+        const auto              dcSpectrum = fftAlgo.compute(dc);
+        expect(approx(static_cast<double>(gr::algorithm::fft::computeMagnitudeSpectrum(dcSpectrum)[0]), 2., tolerance)) << std::format("<{}> DC, full spectrum", type_name<TVal>());
+        expect(approx(static_cast<double>(gr::algorithm::fft::computeMagnitudeSpectrum(dcSpectrum, {.computeHalfSpectrum = true})[0]), 2., tolerance)) << std::format("<{}> DC, half spectrum", type_name<TVal>());
+    } | std::tuple<float, double>();
 
     "Unwrap Phase tests"_test = [] {
         std::vector<double> phase = {0.2, -1., 2.5, -3.1, 0.9, -0.5, 1.2, 0.8, 1.5, -1.2, -2.7, 0.9, -0.8, -1.4, 0.6, 1.1, -1.9, 0.4, 1.3, -0.7};
