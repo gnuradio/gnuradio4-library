@@ -305,7 +305,7 @@ struct SimdFFT {
     constexpr SimdFFT()
     requires(!IsDynamic::value)
     {
-        static_assert(!canProcessSize(size()), "cannot process this size: min>=16C2C (32: R2C) & radix-2, -3, -5 & 'x min' compatible");
+        static_assert(canProcessSize(size()), "cannot process this size: min>=16C2C (32: R2C) & radix-2, -3, -5 & 'x min' compatible");
         computeTwiddles();
     }
 
