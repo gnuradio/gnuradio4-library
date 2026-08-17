@@ -350,6 +350,7 @@ private:
     mutable std::vector<TOutput, gr::allocator::Aligned<TOutput>> aCache{};
     mutable std::vector<TOutput, gr::allocator::Aligned<TOutput>> bCache{};
 
+    // chirp-z: X[k] = w[k] * (a (*) b)[k]; the cyclic convolution's inverse FFT is expressed as conj(FFT(conj(.)))/m
     void transformBluestein(std::ranges::input_range auto& inPlace) const {
         const std::size_t n = inPlace.size();
         const std::size_t m = std::bit_ceil(2 * n + 1);
@@ -369,15 +370,14 @@ private:
             fftCache = std::make_unique<FFT<TOutput, TOutput>>();
         }
 
-        aCache = fftCache->compute(a, aCache); // forward FFT
+        aCache = fftCache->compute(a, aCache);
 
-        // pointwise multiply with chirp spectrum
-        std::transform(aCache.begin(), aCache.end(), bluesteinChirpFFT.begin(), aCache.begin(), std::multiplies<>{});
-        bCache = fftCache->compute(aCache, bCache); // inverse FFT
+        std::transform(aCache.begin(), aCache.end(), bluesteinChirpFFT.begin(), aCache.begin(), [](const TOutput& x, const TOutput& y) { return std::conj(detail::complex_mult(x, y)); });
+        bCache = fftCache->compute(aCache, bCache);
 
-        const ValueType scale = ValueType(1) / ValueType(bCache.size());                          // normalise FFT and scale by 1/N
-        std::transform(bCache.begin(), std::next(bCache.begin(), static_cast<std::ptrdiff_t>(n)), // restrict to signal size (N.B. m > n)
-            bluesteinExpTable.begin(), inPlace.begin(), [scale](auto v, auto w) { return detail::complex_mult(v * scale, w); });
+        const ValueType scale = ValueType(1) / ValueType(m);
+        std::transform(bCache.begin(), std::next(bCache.begin(), static_cast<std::ptrdiff_t>(n)), bluesteinExpTable.begin(), inPlace.begin(), //
+            [scale](const TOutput& v, const TOutput& w) { return detail::complex_mult(std::conj(v) * scale, w); });
     }
 
     void precomputeTwiddleFactors(bool inverse = false) {
@@ -409,7 +409,7 @@ private:
         bluesteinExpTable.resize(n);
         for (std::size_t i = 0; i < n; ++i) {
             const std::uintmax_t tmp   = static_cast<std::uintmax_t>(i) * i % (2 * n);
-            const ValueType      angle = (inverse ? -1 : 1) * std::numbers::pi_v<ValueType> * static_cast<ValueType>(tmp) / static_cast<ValueType>(n);
+            const ValueType      angle = ValueType(inverse ? 1 : -1) * std::numbers::pi_v<ValueType> * static_cast<ValueType>(tmp) / static_cast<ValueType>(n);
             bluesteinExpTable[i]       = std::polar<ValueType>(1.0, angle);
         }
 
