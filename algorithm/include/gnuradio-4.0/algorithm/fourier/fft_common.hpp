@@ -18,6 +18,9 @@ struct ConfigMagnitude {
     bool shiftSpectrum       = false;
 };
 
+/// @brief amplitude spectrum of an unnormalized DFT result.
+/// Every bin of the full spectrum is scaled by 1/N. The half spectrum scales by 2/N to account for
+/// the mirrored bin it drops, except at DC and Nyquist, which have no twin.
 template<std::ranges::input_range TContainerIn, std::ranges::output_range<typename TContainerIn::value_type::value_type> TContainerOut = std::vector<typename TContainerIn::value_type::value_type>, typename T = TContainerIn::value_type>
 requires(std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>)
 auto computeMagnitudeSpectrum(const TContainerIn& fftIn, TContainerOut&& magOut = {}, ConfigMagnitude config = {}) {
@@ -28,8 +31,10 @@ auto computeMagnitudeSpectrum(const TContainerIn& fftIn, TContainerOut&& magOut 
 
     const std::size_t magSize = config.computeHalfSpectrum ? (N / 2UZ) : N;
     using PrecisionType       = typename T::value_type;
-    auto computeMagnitude     = [N, outputInDb = config.outputInDb](const auto& c) {
-        const auto mag{std::hypot(c.real(), c.imag()) * PrecisionType(2.) / static_cast<PrecisionType>(N)};
+    auto computeMagnitude     = [N, halfSpectrum = config.computeHalfSpectrum, outputInDb = config.outputInDb](const auto& c, std::size_t k) {
+        const bool folded = halfSpectrum && k != 0UZ && k != N / 2UZ;
+        const auto scale{(folded ? PrecisionType(2.) : PrecisionType(1.)) / static_cast<PrecisionType>(N)};
+        const auto mag{std::hypot(c.real(), c.imag()) * scale};
         if (outputInDb && mag > PrecisionType(0)) { // avoids log of zero
             return PrecisionType(20.) * std::log10(mag);
         } else if (outputInDb) {
@@ -44,10 +49,16 @@ auto computeMagnitudeSpectrum(const TContainerIn& fftIn, TContainerOut&& magOut 
                   }) {
         magOut.clear();
         magOut.reserve(magSize);
-        std::transform(fftIn.begin(), std::next(fftIn.begin(), static_cast<std::ptrdiff_t>(magSize)), std::back_inserter(magOut), computeMagnitude);
+        auto it = fftIn.begin();
+        for (std::size_t k = 0UZ; k < magSize; ++k, ++it) {
+            magOut.push_back(computeMagnitude(*it, k));
+        }
     } else {
         static_assert(std::tuple_size_v<TContainerIn> == std::tuple_size_v<TContainerOut>, "Size mismatch for fixed-size container.");
-        std::transform(fftIn.begin(), std::next(fftIn.begin(), static_cast<std::ptrdiff_t>(magSize)), magOut.begin(), computeMagnitude);
+        auto it = fftIn.begin();
+        for (std::size_t k = 0UZ; k < magSize; ++k, ++it) {
+            magOut[k] = computeMagnitude(*it, k);
+        }
     }
 
     if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
