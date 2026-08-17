@@ -525,6 +525,18 @@ const boost::ut::suite<"FIR FilterTool"> firFilterToolTests = [] {
         expect(gt(firZeroPhaseAmplitude(filter, 0.5), 0.)) << "Nyquist gain is +1";
     };
 
+    // 100-300 Hz band-pass at fs=1000: passes the band at +1, sign included
+    "FIR band-pass polarity"_test = [] {
+        constexpr auto kParams = FilterParameters{.order = 4UZ, .fLow = 100., .fHigh = 300., .fs = 1000.};
+        const auto     filter  = fir::designFilter<double>(gr::filter::Type::BANDPASS, kParams, Kaiser);
+        const double   center  = std::sqrt(kParams.fLow * kParams.fHigh) / kParams.fs;
+
+        expect(approx(calculateResponse<Normalised, Magnitude>(center, filter), 1., 0.05)) << "pass-band magnitude at the band center";
+        expect(gt(firZeroPhaseAmplitude(filter, center), 0.)) << std::format("pass-band gain is +1, not -1: {:.5f}", firZeroPhaseAmplitude(filter, center));
+        expect(le(calculateResponse<Normalised, Magnitude>(0., filter), 0.05)) << "stop-band at DC";
+        expect(le(calculateResponse<Normalised, Magnitude>(0.5, filter), 0.05)) << "stop-band at Nyquist";
+    };
+
     tag("visual") / "basic fir tests"_test = []() {
         using namespace gr::graphs;
         constexpr auto kFilterParams = FilterParameters{.order = 4UZ, .fLow = 1.0, .fHigh = 10.0, .gain = 0.5, .attenuationDb = 50., .fs = 1000.0};
