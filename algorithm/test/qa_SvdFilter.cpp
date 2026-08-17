@@ -1,6 +1,7 @@
 #include <boost/ut.hpp>
 
 #include <cmath>
+#include <cstdlib>
 #include <numbers>
 #include <print>
 #include <random>
@@ -445,6 +446,9 @@ auto computeRms(const std::vector<double>& filtered, const std::vector<double>& 
 } // namespace
 
 const boost::ut::suite<"SVD denoising comparison"> visualDemoTests = [] {
+    if (std::getenv("ENABLE_VISUAL_TESTS") == nullptr) {
+        return; // chart demos over 640-sample records
+    }
     using namespace boost::ut;
     using namespace gr::graphs;
     using namespace gr::algorithm::svd_filter;
@@ -884,6 +888,9 @@ const boost::ut::suite<"SVD streaming steady state"> svdSteadyStateTests = [] {
 };
 
 const boost::ut::suite<"visual spectrum analysis"> ssaVisualisationTests = [] {
+    if (std::getenv("ENABLE_VISUAL_TESTS") == nullptr) {
+        return; // SSA decomposition chart over a 1000-sample record
+    }
     using namespace boost::ut;
     using namespace gr::graphs;
     using namespace gr::algorithm::svd_filter;
