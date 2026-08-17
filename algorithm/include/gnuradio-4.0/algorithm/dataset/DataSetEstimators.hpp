@@ -156,14 +156,15 @@ template<typename T, typename TValue = gr::meta::fundamental_base_value_type_t<T
     auto signalRange  = dataSet.signalValues(signalIndex) | std::views::drop(indexMin) | std::views::take(indexMax - indexMin);
     auto finiteValues = signalRange | std::views::filter(gr::math::isfinite<T>);
 
-    T sum   = 0;
     T count = 0;
+    T mean  = 0;
+    // Welford: the working values stay at the scale of the deviations, so a large offset cannot swamp the sample spread
     for (const auto& val : finiteValues) {
-        sum += val;
         count += T(1);
+        mean += (val - mean) / count;
     }
 
-    return count > T(0) ? sum / count : std::numeric_limits<TValue>::quiet_NaN();
+    return count > T(0) ? mean : std::numeric_limits<TValue>::quiet_NaN();
 }
 
 template<typename T, typename TValue = gr::meta::fundamental_base_value_type_t<T>>
@@ -207,28 +208,36 @@ template<typename T>
     return *maxIt - *minIt;
 }
 
+/// @brief population standard deviation, computed by Welford accumulation.
 template<typename T>
-[[nodiscard]] constexpr T getRms(const DataSet<T>& dataSet, std::size_t indexMin = 0UZ, std::size_t indexMax = max_size, std::size_t signalIndex = 0UZ, std::source_location location = std::source_location::current()) {
+[[nodiscard]] constexpr T getStdDev(const DataSet<T>& dataSet, std::size_t indexMin = 0UZ, std::size_t indexMax = max_size, std::size_t signalIndex = 0UZ, std::source_location location = std::source_location::current()) {
     indexMax = detail::checkIndexRange(dataSet, indexMin, indexMax, signalIndex, location);
 
     auto signalRange  = dataSet.signalValues(signalIndex) | std::views::drop(indexMin) | std::views::take(indexMax - indexMin);
     auto finiteValues = signalRange | std::views::filter(gr::math::isfinite<T>);
 
-    if (finiteValues.empty()) {
-        return T(0);
+    T count = 0;
+    T mean  = 0;
+    T m2    = 0;
+    for (const auto& val : finiteValues) {
+        count += T(1);
+        const T delta = val - mean;
+        mean += delta / count;
+        m2 += delta * (val - mean);
     }
 
-    T sum   = 0;
-    T sum2  = 0;
-    T count = 0;
-    for (const auto& val : finiteValues) {
-        sum += val;
-        sum2 += val * val;
-        count += T(1);
+    if (!(count > T(0))) {
+        return T(0);
     }
-    T mean1 = (sum / count) * (sum / count);
-    T mean2 = sum2 / count;
-    return gr::math::sqrt(mean2 > mean1 ? mean2 - mean1 : mean1 - mean2); // abs for safety
+    const T variance = m2 / count;
+    return variance > T(0) ? gr::math::sqrt(variance) : T(0);
+}
+
+/// @brief The standard deviation, i.e. the RMS of the mean-subtracted signal, despite the name.
+/// Retained under this name for source compatibility; prefer getStdDev.
+template<typename T>
+[[nodiscard]] constexpr T getRms(const DataSet<T>& dataSet, std::size_t indexMin = 0UZ, std::size_t indexMax = max_size, std::size_t signalIndex = 0UZ, std::source_location location = std::source_location::current()) {
+    return getStdDev(dataSet, indexMin, indexMax, signalIndex, location);
 }
 
 template<typename T>

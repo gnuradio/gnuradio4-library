@@ -236,6 +236,24 @@ const boost::ut::suite<"DataSet<T> estimator"> _qaDataSetEstimators = [] {
     } | std::tuple<float, double, gr::UncertainValue<float>, gr::UncertainValue<double>>{};
     ;
 
+    // a large DC offset must not swamp the sample spread: a 1 V sine riding on 1e6, accumulated in float
+    "mean and standard deviation with a large offset"_test = [] {
+        constexpr std::size_t nPoints   = 100000UZ;
+        constexpr double      offset    = 1.e6;
+        constexpr double      amplitude = 1.;
+        constexpr float       expected  = static_cast<float>(amplitude / std::numbers::sqrt2);
+
+        std::vector<float> values(nPoints);
+        for (std::size_t i = 0UZ; i < nPoints; ++i) {
+            values[i] = static_cast<float>(offset + amplitude * std::sin(2. * std::numbers::pi * 8. * static_cast<double>(i) / static_cast<double>(nPoints)));
+        }
+        const gr::DataSet<float> ds = generate::from<float>("offset sine", values);
+
+        expect(approx(estimators::getMean(ds), static_cast<float>(offset), 1.e-2f)) << std::format("mean: {}", estimators::getMean(ds));
+        expect(approx(estimators::getStdDev(ds), expected, 0.01f * expected)) << std::format("standard deviation: {}", estimators::getStdDev(ds));
+        expect(eq(estimators::getRms(ds), estimators::getStdDev(ds))) << "getRms delegates to getStdDev";
+    };
+
     "getDutyCycle"_test = []<typename T = double> {
         using value_t         = gr::meta::fundamental_base_value_type_t<T>;
         std::vector<T> localY = {0, 0, 0, 1, 1, 1}; // simple data set with 0,0,0,1,1,1 => 50% high
