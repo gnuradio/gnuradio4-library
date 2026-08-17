@@ -281,6 +281,23 @@ const boost::ut::suite<"SVD edge cases"> svdEdgeCaseTests = [] {
             auto           denoised = denoiseWindow<double>(signal, 16UZ, config);
             expect(eq(denoised.size(), signal.size()));
         };
+
+        /// The rest of this file is Config<double>; instantiating the float default keeps the
+        /// member initializers from narrowing under -Werror=float-conversion.
+        "default Config<float>"_test = [] {
+            constexpr Config<float> config{};
+            expect(eq(config.energyFraction, static_cast<float>(0.95)));
+            expect(eq(config.hopFraction, 0.25f));
+
+            std::vector<float> signal(32);
+            for (std::size_t i = 0UZ; i < 32UZ; ++i) {
+                signal[i] = std::sin(2.0f * std::numbers::pi_v<float> * static_cast<float>(i) / 8.0f);
+            }
+
+            auto denoised = denoiseWindow<float>(signal, 16UZ, config);
+            expect(eq(denoised.size(), signal.size()));
+            expect(std::isfinite(denoised.front()));
+        };
     };
 
     "streaming denoiser edge cases"_test = [] {
@@ -331,6 +348,45 @@ const boost::ut::suite<"SVD edge cases"> svdEdgeCaseTests = [] {
             Config<double>      config{.hopFraction = 0.001};
             SvdDenoiser<double> denoiser(32UZ, 16UZ, config);
             expect(ge(denoiser.hopSize(), 1UZ)) << "hopSize should be at least 1";
+        };
+
+        "hopFraction above 1 clamps to the window size"_test = [] {
+            SvdDenoiser<double> denoiser(32UZ, 16UZ, Config<double>{.maxRank = 2UZ, .hopFraction = 2.0});
+            expect(eq(denoiser.hopSize(), 32UZ)) << "hopSize must not exceed windowSize";
+
+            std::vector<double> outputs;
+            for (std::size_t i = 0UZ; i < 200UZ; ++i) {
+                outputs.push_back(denoiser.processOne(std::sin(2.0 * std::numbers::pi_v<double> * static_cast<double>(i) / 8.0)));
+            }
+            expect(eq(outputs.size(), 200UZ));
+            expect(std::ranges::all_of(outputs, [](double v) { return std::isfinite(v); })) << "no out-of-window reads";
+        };
+
+        "default configuration denoises"_test = [] {
+            constexpr std::size_t            nSamples = 256UZ;
+            std::mt19937                     rng{42U};
+            std::normal_distribution<double> noise{0.0, 0.3};
+
+            std::vector<double> clean(nSamples);
+            std::vector<double> noisy(nSamples);
+            for (std::size_t i = 0UZ; i < nSamples; ++i) {
+                clean[i] = std::sin(2.0 * std::numbers::pi_v<double> * static_cast<double>(i) / 16.0);
+                noisy[i] = clean[i] + noise(rng);
+            }
+
+            SvdDenoiser<double> denoiser(32UZ); // two periods of the test tone; the default Config is what is under test
+            std::vector<double> denoised(nSamples);
+            std::ranges::transform(noisy, denoised.begin(), [&denoiser](double v) { return denoiser.processOne(v); });
+
+            const std::size_t settle      = 64UZ;
+            const std::size_t delay       = denoiser.delay();
+            double            noisyError  = 0.0;
+            double            outputError = 0.0;
+            for (std::size_t i = settle; i + delay < nSamples; ++i) {
+                noisyError += (noisy[i] - clean[i]) * (noisy[i] - clean[i]);
+                outputError += (denoised[i + delay] - clean[i]) * (denoised[i + delay] - clean[i]);
+            }
+            expect(lt(outputError, noisyError)) << std::format("default denoiser must reduce noise: {:.4f} vs {:.4f}", outputError, noisyError);
         };
     };
 
