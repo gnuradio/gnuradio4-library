@@ -8,6 +8,7 @@
 #include <numbers>
 #include <ranges>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include <gnuradio-4.0/algorithm/fourier/SimdFFT.hpp>
@@ -127,7 +128,8 @@ struct FFT {
         precomputeBitReversal();
     }
 
-    auto compute(const std::ranges::input_range auto& in, std::ranges::output_range<TOutput> auto&& out) {
+    // returns 'out' itself: an lvalue reference for an lvalue argument, an xvalue for an rvalue argument that the caller must consume immediately
+    decltype(auto) compute(const std::ranges::input_range auto& in, std::ranges::output_range<TOutput> auto&& out) {
         if constexpr (requires { out.resize(in.size()); }) {
             if (out.size() != in.size()) {
                 out.resize(in.size());
@@ -136,7 +138,7 @@ struct FFT {
 
         const auto size = in.size();
         if (size == 0) {
-            return out;
+            return std::forward<decltype(out)>(out);
         }
 
         if (fftSize != size) {
@@ -148,7 +150,7 @@ struct FFT {
         }
 
         if (useSimdFFT && SimdFFT<ValueType, kTransform>::canProcessSize(size, Order::Ordered) && trySimdFFT(in, out)) { // use SimdFFT if enabled and size is supported
-            return out;
+            return std::forward<decltype(out)>(out);
         }
 
         // fallback to original implementation
@@ -166,7 +168,7 @@ struct FFT {
             transformBluestein(out);
         }
 
-        return out;
+        return std::forward<decltype(out)>(out);
     }
 
     auto compute(const std::ranges::input_range auto& in) {
@@ -328,10 +330,10 @@ private:
             fftCache = std::make_unique<FFT<TOutput, TOutput>>();
         }
 
-        aCache = fftCache->compute(a, aCache);
+        fftCache->compute(a, aCache);
 
         std::transform(aCache.begin(), aCache.end(), bluesteinChirpFFT.begin(), aCache.begin(), [](const TOutput& x, const TOutput& y) { return std::conj(detail::complex_mult(x, y)); });
-        bCache = fftCache->compute(aCache, bCache);
+        fftCache->compute(aCache, bCache);
 
         const ValueType scale = ValueType(1) / ValueType(m);
         std::transform(bCache.begin(), std::next(bCache.begin(), static_cast<std::ptrdiff_t>(n)), bluesteinExpTable.begin(), inPlace.begin(), //
