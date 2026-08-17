@@ -25,6 +25,44 @@ std::vector<T> generateSinSample(std::size_t N, double sample_rate, double frequ
     return signal;
 }
 
+template<typename TIn>
+std::vector<std::complex<double>> naiveDft(const std::vector<TIn>& in) {
+    const std::size_t                 n = in.size();
+    std::vector<std::complex<double>> out(n);
+    for (std::size_t k = 0; k < n; ++k) {
+        std::complex<double> acc{};
+        for (std::size_t i = 0; i < n; ++i) {
+            const double angle = -2. * std::numbers::pi * static_cast<double>((i * k) % n) / static_cast<double>(n);
+            acc += std::complex<double>(static_cast<double>(in[i].real()), static_cast<double>(in[i].imag())) * std::polar<double>(1., angle);
+        }
+        out[k] = acc;
+    }
+    return out;
+}
+
+template<typename TActual>
+double relativeL2Error(const TActual& actual, const std::vector<std::complex<double>>& reference) {
+    double num = 0.;
+    double den = 0.;
+    for (std::size_t k = 0; k < reference.size(); ++k) {
+        const std::complex<double> a{static_cast<double>(actual[k].real()), static_cast<double>(actual[k].imag())};
+        num += std::norm(a - reference[k]);
+        den += std::norm(reference[k]);
+    }
+    return den > 0. ? std::sqrt(num / den) : std::sqrt(num);
+}
+
+template<typename T>
+std::vector<T> deterministicComplexSignal(std::size_t n) {
+    std::vector<T> signal(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const double x = std::sin(0.7 * static_cast<double>(i) + 0.3) + 0.4 * std::cos(2.9 * static_cast<double>(i));
+        const double y = std::cos(1.3 * static_cast<double>(i) - 0.9) - 0.2 * std::sin(0.11 * static_cast<double>(i));
+        signal[i]      = T(static_cast<typename T::value_type>(x), static_cast<typename T::value_type>(y));
+    }
+    return signal;
+}
+
 template<gr::meta::array_or_vector_type T, gr::meta::array_or_vector_type U = T>
 bool equalVectors(const T& v1, const U& v2, double tolerance = std::is_same_v<typename T::value_type, double> ? 1.e-5 : 1e-4) {
     if (v1.size() != v2.size()) {
@@ -139,6 +177,23 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
             expect(approx(static_cast<double>(peakAmplitude), expectedPeakAmplitude, tolerance)) << std::format("<{}> equal amplitude", type_name<T>());
             expect(approx(static_cast<double>(fftResult[0].real()), static_cast<double>(expectedFft0.real()), tolerance)) << std::format("<{}> equal fft[0].real()", type_name<T>());
             expect(approx(static_cast<double>(fftResult[0].imag()), static_cast<double>(expectedFft0.imag()), tolerance)) << std::format("<{}> equal fft[0].imag()", type_name<T>());
+        }
+    } | ComplexTypesToTest{};
+
+    // FFT<>::compute equals the unnormalized forward DFT for sizes that are not a power of two
+    "non-power-of-two forward DFT"_test = []<typename T>() {
+        using InType    = typename T::InType;
+        using ValueType = typename T::OutType::value_type;
+        typename T::AlgoType fftAlgo{};
+
+        const double tolerance = std::is_same_v<ValueType, float> ? 1.e-4 : 1.e-10;
+        for (const std::size_t n : {3UZ, 5UZ, 6UZ, 7UZ, 9UZ, 10UZ, 12UZ, 13UZ, 100UZ, 257UZ, 1000UZ, 1009UZ}) {
+            const auto signal    = deterministicComplexSignal<InType>(n);
+            const auto reference = naiveDft(signal);
+            const auto result    = fftAlgo.compute(signal);
+
+            expect(eq(result.size(), n)) << std::format("<{}> n={} output size", type_name<T>(), n);
+            expect(lt(relativeL2Error(result, reference), tolerance)) << std::format("<{}> n={} relative L2 error {}", type_name<T>(), n, relativeL2Error(result, reference));
         }
     } | ComplexTypesToTest{};
 
