@@ -233,7 +233,12 @@ const boost::ut::suite<"IIR FilterTool"> iirFilterToolTests = [] {
                 for (auto subrange : {sequence_range(0.1, 0.9, 0.01), sequence_range(1.0, 9.0, 0.1), sequence_range(10.0, 90.0, 1.0), sequence_range(100.0, 490.0, 10.0)}) {
                     std::ranges::move(subrange, std::back_inserter(frequencies));
                 }
-                std::vector<double> filterResponse   = calculateFrequencyResponse<Magnitude>(frequencies, analogPoleZeros);                    // provide in absolute values
+                // the bilinear transform is exact at the warped frequency: H_digital(f) == H_analog(2*fs*tan(pi*f/fs))
+                std::vector<double> warpedOmega(frequencies.size());
+                std::ranges::transform(frequencies, warpedOmega.begin(), [](double f) { return 2. * kSampling * std::tan(std::numbers::pi * f / kSampling); });
+
+                std::vector<double> filterResponse(frequencies.size());
+                std::ranges::transform(warpedOmega, filterResponse.begin(), [&analogPoleZeros](double omega) { return iir::calculateResponse<RadianPerSec, Magnitude>(omega, analogPoleZeros); });
                 std::vector<double> responseDigital1 = calculateFrequencyResponse<Magnitude>(frequencies, kSampling, digitalPoleZerosFull);    // provide in absolute values
                 std::vector<double> responseDigital2 = calculateFrequencyResponse<Magnitude>(frequencies, kSampling, digitalPoleZerosBiquads); // provide in absolute values
 
@@ -257,6 +262,39 @@ const boost::ut::suite<"IIR FilterTool"> iirFilterToolTests = [] {
             }
         } | std::vector{LOWPASS, HIGHPASS, BANDPASS, BANDSTOP};
     } | std::vector{BUTTERWORTH, BESSEL, CHEBYSHEV1, CHEBYSHEV2};
+
+    // pre-warping places the -3 dB point at the requested corner; the zeros at z = -1 (z = +1) give the roll-off at Nyquist (DC)
+    "IIR bilinear corner frequency and stop-band roll-off"_test = [] {
+        constexpr double fs = 1000.;
+        constexpr double fc = 250.;
+
+        const auto magnitude = [](const std::vector<FilterCoefficients<double>>& sections, double normalizedFrequency) { //
+            return std::transform_reduce(sections.cbegin(), sections.cend(), 1., std::multiplies{}, [normalizedFrequency](const auto& section) { return calculateResponse<Normalised, Magnitude>(normalizedFrequency, section); });
+        };
+        const auto cornerFrequency = [&magnitude](const std::vector<FilterCoefficients<double>>& sections, bool lowPass) {
+            double lo = 1.e-6;
+            double hi = 0.4999;
+            for (std::size_t i = 0UZ; i < 100UZ; ++i) {
+                const double mid = 0.5 * (lo + hi);
+                if ((magnitude(sections, mid) > std::numbers::sqrt2 / 2.) == lowPass) {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            return 0.5 * (lo + hi) * fs;
+        };
+
+        const auto lowPass = iir::designFilter<double>(Type::LOWPASS, {.order = 4UZ, .fLow = fc, .fs = fs}, BUTTERWORTH);
+        expect(approx(cornerFrequency(lowPass, true), fc, 0.01 * fc)) << std::format("low-pass -3 dB point: {:.4f} Hz", cornerFrequency(lowPass, true));
+        expect(approx(magnitude(lowPass, 0.), 1., 1.e-9)) << "low-pass unity gain at DC";
+        expect(lt(magnitude(lowPass, 0.5), 1.e-3)) << std::format("low-pass rejects Nyquist by more than 60 dB: {:.3e}", magnitude(lowPass, 0.5));
+
+        const auto highPass = iir::designFilter<double>(Type::HIGHPASS, {.order = 4UZ, .fHigh = fc, .fs = fs}, BUTTERWORTH);
+        expect(approx(cornerFrequency(highPass, false), fc, 0.01 * fc)) << std::format("high-pass -3 dB point: {:.4f} Hz", cornerFrequency(highPass, false));
+        expect(approx(magnitude(highPass, 0.5), 1., 1.e-9)) << "high-pass unity gain at Nyquist";
+        expect(lt(magnitude(highPass, 0.), 1.e-3)) << std::format("high-pass rejects DC by more than 60 dB: {:.3e}", magnitude(highPass, 0.));
+    };
 
     "IIR low-pass filter"_test = []<typename FilterType>(FilterType) {
         using namespace gr::filter::iir;
