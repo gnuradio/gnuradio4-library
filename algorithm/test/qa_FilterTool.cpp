@@ -58,6 +58,16 @@ void printFilter(std::string_view name, const Container& filters) {
     }
 }
 
+// signed zero-phase amplitude of a symmetric (linear-phase) FIR, i.e. H(f) with the delay term divided out
+[[nodiscard]] inline double firZeroPhaseAmplitude(const gr::filter::FilterCoefficients<double>& filter, double normalizedFrequency) {
+    const double         center = static_cast<double>(filter.b.size() - 1UZ) / 2.;
+    std::complex<double> acc{};
+    for (std::size_t n = 0UZ; n < filter.b.size(); ++n) {
+        acc += filter.b[n] * std::polar(1., -2. * std::numbers::pi * normalizedFrequency * (static_cast<double>(n) - center));
+    }
+    return acc.real();
+}
+
 template<std::size_t width = 51, std::size_t height = 21>
 void poleZeroPlot(const gr::filter::iir::PoleZeroLocations& value, double radius = 2.0) {
     constexpr std::size_t samples = 360Z;
@@ -501,6 +511,19 @@ const boost::ut::suite<"FIR FilterTool"> firFilterToolTests = [] {
             // N.B. cannot test magnitude response shape since there are not analog-vs-digital equivalents to compare
         } | std::vector{LOWPASS, HIGHPASS, BANDPASS, BANDSTOP}; //
     } | std::vector{Kaiser, Hamming, Hann};
+
+    // 100-300 Hz band-stop at fs=1000: rejects the band and passes DC and Nyquist at +1
+    "FIR band-stop rejection and polarity"_test = [] {
+        constexpr auto kParams = FilterParameters{.order = 4UZ, .fLow = 100., .fHigh = 300., .fs = 1000.};
+        const auto     filter  = fir::designFilter<double>(gr::filter::Type::BANDSTOP, kParams, Kaiser);
+        const double   center  = std::sqrt(kParams.fLow * kParams.fHigh) / kParams.fs;
+
+        expect(le(calculateResponse<Normalised, Magnitude>(center, filter), 0.01)) << std::format("stop-band rejection at the band center: {:.5f}", calculateResponse<Normalised, Magnitude>(center, filter));
+        expect(approx(calculateResponse<Normalised, Magnitude>(0., filter), 1., 0.05)) << "pass-band ripple at DC";
+        expect(approx(calculateResponse<Normalised, Magnitude>(0.5, filter), 1., 0.05)) << "pass-band ripple at Nyquist";
+        expect(gt(firZeroPhaseAmplitude(filter, 0.), 0.)) << "DC gain is +1";
+        expect(gt(firZeroPhaseAmplitude(filter, 0.5), 0.)) << "Nyquist gain is +1";
+    };
 
     tag("visual") / "basic fir tests"_test = []() {
         using namespace gr::graphs;

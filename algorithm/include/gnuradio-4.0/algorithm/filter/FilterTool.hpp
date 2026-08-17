@@ -1055,7 +1055,7 @@ template<std::floating_point T>
             bandStopCoefficients.b[n] -= highPassCoefficients.b[n];
 
             if (N % 2 != 0 && n == (N - 1) / 2) { // adjust the centre tap if N is odd. even N are not handled here
-                bandStopCoefficients.b[n] = 1 - bandStopCoefficients.b[n];
+                bandStopCoefficients.b[n] += 1;
             }
         }
 
