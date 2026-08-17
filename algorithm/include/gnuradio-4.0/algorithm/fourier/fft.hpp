@@ -97,6 +97,9 @@ constexpr void fft_stage_kernel(C* data, const C* twiddles, std::size_t halfsize
  * Transforms are unnormalized, matching SimdFFT's convention: feeding the output of a
  * Direction::Forward instance into a Direction::Backward one of the same length returns N times the
  * input. Real-valued input (R2C) is forward-only.
+ *
+ * compute() mutates per-instance scratch (SimdFFT state, aligned buffers, Bluestein caches):
+ * hold one instance per thread.
  */
 template<typename TInput, gr::meta::complex_like TOutput = std::conditional_t<gr::meta::complex_like<TInput>, TInput, std::complex<TInput>>, Direction TDirection = Direction::Forward>
 requires((gr::meta::complex_like<TInput> || std::floating_point<TInput>))
@@ -114,10 +117,10 @@ struct FFT {
     constexpr static bool      kInverse   = kDirection == Direction::Backward;
     static_assert(kTransform == Transform::Complex || kDirection == Direction::Forward, "real-valued input (R2C) supports the forward transform only");
 
-    mutable SimdFFT<ValueType, kTransform>                            simdFFT{};
-    mutable std::vector<ValueType, gr::allocator::Aligned<ValueType>> alignedInputBuffer{};
-    mutable std::vector<ValueType, gr::allocator::Aligned<ValueType>> alignedOutputBuffer{};
-    bool                                                              useSimdFFT{true};
+    SimdFFT<ValueType, kTransform>                            simdFFT{};
+    std::vector<ValueType, gr::allocator::Aligned<ValueType>> alignedInputBuffer{};
+    std::vector<ValueType, gr::allocator::Aligned<ValueType>> alignedOutputBuffer{};
+    bool                                                      useSimdFFT{true};
 
     void initAll() {
         precomputeTwiddleFactors();
@@ -173,7 +176,7 @@ struct FFT {
     }
 
     template<typename InRange, typename OutRange>
-    bool trySimdFFT(const InRange& in, OutRange&& out) const {
+    bool trySimdFFT(const InRange& in, OutRange&& out) {
         if (simdFFT.size() != in.size()) {
             simdFFT.resize(in.size());
         }
@@ -185,7 +188,7 @@ struct FFT {
     }
 
 private:
-    bool trySimdFFT_C2C(const auto& in, auto&& out, std::size_t N) const {
+    bool trySimdFFT_C2C(const auto& in, auto&& out, std::size_t N) {
         using InputValueType        = typename std::remove_cvref_t<decltype(in)>::value_type::value_type;
         const std::size_t nElements = 2UZ * N;
         static_assert(sizeof(std::complex<ValueType>) == 2 * sizeof(ValueType), "SimdFFT backend expects interleaved scalars; complex<T> must be 2*T bytes.");
@@ -222,7 +225,7 @@ private:
         return true;
     }
 
-    bool trySimdFFT_R2C(const auto& in, auto&& out, std::size_t N) const {
+    bool trySimdFFT_R2C(const auto& in, auto&& out, std::size_t N) {
         using InputValueType = typename std::remove_cvref_t<decltype(in)>::value_type;
         static_assert(std::is_trivially_copyable_v<InputValueType>);
         static_assert(std::is_trivially_copyable_v<ValueType>);
@@ -268,7 +271,7 @@ private:
         return true;
     }
 
-    void transformRadix2(std::ranges::input_range auto& inPlace) const {
+    void transformRadix2(std::ranges::input_range auto& inPlace) {
         const std::size_t N = inPlace.size();
         if (!std::has_single_bit(N)) {
             throw std::invalid_argument(std::format("Input data must be power-of-two, input size: {}", inPlace.size()));
@@ -301,12 +304,12 @@ private:
         }
     }
 
-    mutable std::unique_ptr<FFT<TOutput, TOutput>>                fftCache;
-    mutable std::vector<TOutput, gr::allocator::Aligned<TOutput>> aCache{};
-    mutable std::vector<TOutput, gr::allocator::Aligned<TOutput>> bCache{};
+    std::unique_ptr<FFT<TOutput, TOutput>>                fftCache;
+    std::vector<TOutput, gr::allocator::Aligned<TOutput>> aCache{};
+    std::vector<TOutput, gr::allocator::Aligned<TOutput>> bCache{};
 
     // chirp-z: X[k] = w[k] * (a (*) b)[k]; the cyclic convolution's inverse FFT is expressed as conj(FFT(conj(.)))/m
-    void transformBluestein(std::ranges::input_range auto& inPlace) const {
+    void transformBluestein(std::ranges::input_range auto& inPlace) {
         const std::size_t n = inPlace.size();
         const std::size_t m = std::bit_ceil(2 * n + 1);
 
