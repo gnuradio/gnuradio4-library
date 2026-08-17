@@ -801,9 +801,11 @@ const boost::ut::suite<"IIR & FIR Benchmarks"> filterBenchmarks = [] {
         constexpr FilterParameters kFilterParameter{.order = 4UZ, .fLow = 4., .fHigh = 6., .attenuationDb = 50., .fs = 1000.};
         constexpr Design           filterDesign = BUTTERWORTH;
 
-        constexpr std::size_t nSamples = 100'000;
-        std::vector<T>        yValues(nSamples);
-        const T               centreFrequency = std::sqrt(static_cast<T>(kFilterParameter.fLow * kFilterParameter.fHigh));
+        // ut applies its tag filter to non-parameterized tests only, so the record length is the opt-in
+        // here: the short default still settles every filter form and keeps its gain assertion
+        const std::size_t nSamples = std::getenv("ENABLE_BENCHMARK_TESTS") != nullptr ? 100'000UZ : 2'000UZ;
+        std::vector<T>    yValues(nSamples);
+        const T           centreFrequency = std::sqrt(static_cast<T>(kFilterParameter.fLow * kFilterParameter.fHigh));
         for (std::size_t i = 0UZ; i < yValues.size(); ++i) {
             yValues[i] = std::sin(static_cast<T>(2) * std::numbers::pi_v<T> * centreFrequency / static_cast<T>(kFilterParameter.fs) * static_cast<T>(i));
         }
