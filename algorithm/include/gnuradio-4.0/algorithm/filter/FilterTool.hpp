@@ -466,10 +466,11 @@ template<Frequency frequencyType, ResponseType responseType>
         return value.gain * std::abs(product_over_range(value.zeros) / product_over_range(value.poles));
     } else if constexpr (responseType == ResponseType::MagnitudeDB) {
         return 20.0 * std::log10(std::abs(value.gain * std::abs(product_over_range(value.zeros) / product_over_range(value.poles))));
-    } else if (responseType == ResponseType::Phase) {
-        return (std::arg(value.gain * std::abs(product_over_range(value.zeros))) - std::arg(product_over_range(value.poles)));
-    } else if (responseType == ResponseType::PhaseDegrees) {
-        return (std::arg(value.gain * std::abs(product_over_range(value.zeros))) - std::arg(product_over_range(value.poles))) * 180. / std::numbers::pi;
+    } else if constexpr (responseType == ResponseType::Phase) {
+        return std::arg(C{value.gain}) + std::arg(product_over_range(value.zeros)) - std::arg(product_over_range(value.poles));
+    } else {
+        static_assert(responseType == ResponseType::PhaseDegrees, "unhandled ResponseType");
+        return (std::arg(C{value.gain}) + std::arg(product_over_range(value.zeros)) - std::arg(product_over_range(value.poles))) * 180. / std::numbers::pi;
     }
 }
 
