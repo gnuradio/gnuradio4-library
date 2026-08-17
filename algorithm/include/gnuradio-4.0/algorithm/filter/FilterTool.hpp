@@ -384,13 +384,17 @@ template<Frequency frequencyType, ResponseType responseType, std::floating_point
 
     // e^(i*omega) term for the frequency
     const std::complex<T> iOmega   = std::polar(static_cast<T>(1), frequencyType == Frequency::RadianPerSec ? normalisedDigitalFrequency : (static_cast<T>(2) * std::numbers::pi_v<T> * normalisedDigitalFrequency));
+    const C               zInv     = std::conj(iOmega);
     T                     response = responseType == ResponseType::Magnitude ? static_cast<T>(1) : static_cast<T>(0);
+
+    // iOmega lies on the unit circle, so z⁻¹ == conj(z); Horner over the reversed coefficients then
+    // evaluates Σₙ coefficient[n]·z⁻ⁿ with one complex multiply per tap
+    const auto horner = [zInv](C acc, T coefficient) { return acc * zInv + coefficient; };
 
     for (const auto& filter : filterCoefficients_) {
         // calculates numerator and denominator of the transfer function H(z) = B(z)/A(z)
-        const auto power       = [iOmega, n = 0UZ](C acc, T coefficient) mutable { return acc + coefficient * static_cast<C>(std::pow(iOmega, -static_cast<int>(n++))); };
-        C          numerator   = std::accumulate(filter.b.begin(), filter.b.end(), C(0), power);
-        C          denominator = std::accumulate(filter.a.begin(), filter.a.end(), C(0), power);
+        C numerator   = std::accumulate(filter.b.rbegin(), filter.b.rend(), C(0), horner);
+        C denominator = std::accumulate(filter.a.rbegin(), filter.a.rend(), C(0), horner);
 
         if constexpr (responseType == ResponseType::Magnitude) {
             response *= std::abs(numerator / denominator);
