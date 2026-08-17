@@ -561,6 +561,9 @@ template<Frequency frequencyType, ResponseType responseType>
     return ret;
 }
 
+/// @brief bilinear (Tustin) transform s -> z.
+/// The (n_poles - n_zeros) zeros the analog filter carries at s = infinity are finite in z and are
+/// made explicit at z = -1, which is what gives the digital filter its roll-off towards Nyquist.
 [[nodiscard]] inline constexpr PoleZeroLocations analogToDigitalTransform(const PoleZeroLocations& analogPoleZeros, double samplingRate) {
     // see: https://en.wikipedia.org/wiki/Bilinear_transform#Discrete-time_approximation
     const double twoFs             = 2. * samplingRate;
@@ -570,10 +573,13 @@ template<Frequency frequencyType, ResponseType responseType>
 
     PoleZeroLocations digitalPoleZeros;
     digitalPoleZeros.poles.reserve(analogPoleZeros.poles.size());
-    digitalPoleZeros.zeros.reserve(analogPoleZeros.zeros.size());
+    digitalPoleZeros.zeros.reserve(std::max(analogPoleZeros.zeros.size(), analogPoleZeros.poles.size()));
 
     std::transform(analogPoleZeros.poles.begin(), analogPoleZeros.poles.end(), std::back_inserter(digitalPoleZeros.poles), bilinearTransform);
     std::transform(analogPoleZeros.zeros.begin(), analogPoleZeros.zeros.end(), std::back_inserter(digitalPoleZeros.zeros), bilinearTransform);
+    while (digitalPoleZeros.zeros.size() < digitalPoleZeros.poles.size()) {
+        digitalPoleZeros.zeros.emplace_back(-1., 0.);
+    }
     digitalPoleZeros.gain = analogPoleZeros.gain;
 
     return digitalPoleZeros;
@@ -675,11 +681,21 @@ template<typename T, std::ranges::input_range Range>
     return coefficients;
 }
 
+/// @brief analog angular corner frequency whose bilinear image is the digital corner @p f.
+/// Without a finite sampling rate the design stays analog, and the plain analog corner is returned.
+[[nodiscard]] inline constexpr double prewarpedAngularFrequency(double f, double fs) {
+    if (!std::isfinite(fs) || fs <= 0.) {
+        return 2. * std::numbers::pi * f;
+    }
+    return 2. * fs * std::tan(std::numbers::pi * f / fs);
+}
+
 [[nodiscard]] inline constexpr PoleZeroLocations lowPassProtoToLowPass(const PoleZeroLocations& lowPassProto, FilterParameters parameters) {
     PoleZeroLocations lowPass = lowPassProto;
+    const double      omegaC  = prewarpedAngularFrequency(parameters.fLow, parameters.fs);
 
-    std::ranges::for_each(lowPass.poles, [fLow = parameters.fLow](std::complex<double>& pole) { pole *= 2. * std::numbers::pi * fLow; });
-    std::ranges::for_each(lowPass.zeros, [fLow = parameters.fLow](std::complex<double>& zero) { zero *= 2. * std::numbers::pi * fLow; });
+    std::ranges::for_each(lowPass.poles, [omegaC](std::complex<double>& pole) { pole *= omegaC; });
+    std::ranges::for_each(lowPass.zeros, [omegaC](std::complex<double>& zero) { zero *= omegaC; });
 
     lowPass.gain = parameters.gain * lowPassProto.gain / calculateResponse<Frequency::RadianPerSec, ResponseType::Magnitude>(0., lowPass); // normalise at DC
     return lowPass;
@@ -687,12 +703,13 @@ template<typename T, std::ranges::input_range Range>
 
 [[nodiscard]] inline constexpr PoleZeroLocations lowPassProtoToHighPass(const PoleZeroLocations& lowPassProto, FilterParameters parameters) {
     PoleZeroLocations highPass = lowPassProto;
+    const double      omegaC   = prewarpedAngularFrequency(parameters.fHigh, parameters.fs);
 
-    std::ranges::for_each(highPass.poles, [freqHigh = parameters.fHigh](auto& pole) { pole = 2. * std::numbers::pi * freqHigh / pole; });
+    std::ranges::for_each(highPass.poles, [omegaC](auto& pole) { pole = omegaC / pole; });
     if (highPass.zeros.empty()) {
         highPass.zeros.resize(lowPassProto.poles.size()); // zeros at infinity (represented as explicit zeros here)
     } else {
-        std::ranges::for_each(highPass.zeros, [freqHigh = parameters.fHigh](auto& zeros) { zeros = 2. * std::numbers::pi * freqHigh / zeros; });
+        std::ranges::for_each(highPass.zeros, [omegaC](auto& zeros) { zeros = omegaC / zeros; });
         if (lowPassProto.poles.size() > highPass.zeros.size()) {
             const std::size_t missingZeros = lowPassProto.poles.size() - highPass.zeros.size();
             highPass.zeros.resize(highPass.zeros.size() + missingZeros); // zeros at infinity (represented as explicit zeros here)
@@ -706,8 +723,10 @@ template<typename T, std::ranges::input_range Range>
 
 [[nodiscard]] inline constexpr PoleZeroLocations lowPassProtoToBandPass(const PoleZeroLocations& lowPassProto, FilterParameters parameters) {
     constexpr double epsilon   = 1e-10;
-    const double     omega0    = 2. * std::numbers::pi * std::sqrt(parameters.fLow * parameters.fHigh); // centre frequency
-    const double     bandWidth = 2. * std::numbers::pi * std::abs(parameters.fHigh - parameters.fLow);
+    const double     omegaLow  = prewarpedAngularFrequency(parameters.fLow, parameters.fs);
+    const double     omegaHigh = prewarpedAngularFrequency(parameters.fHigh, parameters.fs);
+    const double     omega0    = std::sqrt(omegaLow * omegaHigh); // center frequency
+    const double     bandWidth = std::abs(omegaHigh - omegaLow);
     const double     Q         = omega0 / bandWidth; // quality factor
 
     const auto transform = [Q, omega0](const std::complex<double>& s) -> std::pair<std::complex<double>, std::complex<double>> {
@@ -764,8 +783,10 @@ template<typename T, std::ranges::input_range Range>
 
 [[nodiscard]] inline constexpr PoleZeroLocations lowPassProtoToBandStop(const PoleZeroLocations& lowPassProto, FilterParameters parameters) {
     constexpr double epsilon   = 1e-10;
-    const double     omega0    = 2. * std::numbers::pi * std::sqrt(parameters.fLow * parameters.fHigh); // centre frequency
-    const double     bandWidth = 2. * std::numbers::pi * std::abs(parameters.fHigh - parameters.fLow);
+    const double     omegaLow  = prewarpedAngularFrequency(parameters.fLow, parameters.fs);
+    const double     omegaHigh = prewarpedAngularFrequency(parameters.fHigh, parameters.fs);
+    const double     omega0    = std::sqrt(omegaLow * omegaHigh); // center frequency
+    const double     bandWidth = std::abs(omegaHigh - omegaLow);
     const double     Q         = omega0 / bandWidth; // quality factor
 
     auto transform = [omega0, Q](const std::complex<double>& s) -> std::pair<std::complex<double>, std::complex<double>> {
