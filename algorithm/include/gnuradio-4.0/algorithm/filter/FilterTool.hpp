@@ -1038,7 +1038,7 @@ template<std::floating_point T>
         auto bandPassCoefficients = generateCoefficients<T>(N, window, static_cast<T>(params.fLow / params.fs), static_cast<T>(params.beta));
         auto highPassCoefficients = generateCoefficients<T>(N, window, static_cast<T>(params.fHigh / params.fs), static_cast<T>(params.beta));
 
-        std::transform(bandPassCoefficients.b.begin(), bandPassCoefficients.b.end(), highPassCoefficients.b.begin(), bandPassCoefficients.b.begin(), std::minus<>());
+        std::transform(highPassCoefficients.b.begin(), highPassCoefficients.b.end(), bandPassCoefficients.b.begin(), bandPassCoefficients.b.begin(), std::minus<>());
 
         const auto [ok, actualGain] = normaliseFilterCoefficients(bandPassCoefficients, static_cast<T>(sqrt(params.fHigh * params.fLow) / params.fs), static_cast<T>(params.gain));
         if (ok) {
