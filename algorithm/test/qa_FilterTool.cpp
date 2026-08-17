@@ -296,6 +296,24 @@ const boost::ut::suite<"IIR FilterTool"> iirFilterToolTests = [] {
         expect(lt(magnitude(highPass, 0.), 1.e-3)) << std::format("high-pass rejects DC by more than 60 dB: {:.3e}", magnitude(highPass, 0.));
     };
 
+    // analytic phase of single-pole and single-zero analog sections
+    "IIR analog phase response"_test = [] {
+        using gr::filter::iir::PoleZeroLocations;
+        constexpr double omegaC = 3.;
+
+        const PoleZeroLocations onePole{.poles = {{-omegaC, 0.}}, .zeros = {}, .gain = omegaC};
+        expect(approx(iir::calculateResponse<RadianPerSec, PhaseDegrees>(0., onePole), 0., 1.e-9)) << "one-pole phase at DC";
+        expect(approx(iir::calculateResponse<RadianPerSec, PhaseDegrees>(omegaC, onePole), -45., 1.e-9)) << "one-pole phase at the corner";
+        expect(approx(iir::calculateResponse<RadianPerSec, PhaseDegrees>(1.e6 * omegaC, onePole), -90., 1.e-3)) << "one-pole phase far above the corner";
+
+        const PoleZeroLocations zeroAndPole{.poles = {{-omegaC, 0.}}, .zeros = {{0., 0.}}, .gain = 1.};
+        expect(approx(iir::calculateResponse<RadianPerSec, PhaseDegrees>(omegaC, zeroAndPole), 45., 1.e-9)) << "a zero at the origin contributes +90 deg";
+        expect(approx(iir::calculateResponse<RadianPerSec, Phase>(omegaC, zeroAndPole), std::numbers::pi / 4., 1.e-12)) << "radian and degree phase agree";
+
+        const PoleZeroLocations negativeGain{.poles = {{-omegaC, 0.}}, .zeros = {}, .gain = -omegaC};
+        expect(approx(std::abs(iir::calculateResponse<RadianPerSec, PhaseDegrees>(0., negativeGain)), 180., 1.e-9)) << "a negative gain contributes 180 deg";
+    };
+
     "IIR low-pass filter"_test = []<typename FilterType>(FilterType) {
         using namespace gr::filter::iir;
         constexpr double      fs           = 1000.;
