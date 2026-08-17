@@ -141,13 +141,7 @@ struct FFT {
             return std::forward<decltype(out)>(out);
         }
 
-        if (fftSize != size) {
-            fftSize = size;
-            initAll();
-        }
-        if (!std::has_single_bit(size) && bluesteinExpTable.size() != size) {
-            precomputeBluesteinTable(size); // added
-        }
+        fftSize = size;
 
         if (useSimdFFT && SimdFFT<ValueType, kTransform>::canProcessSize(size, Order::Ordered) && trySimdFFT(in, out)) { // use SimdFFT if enabled and size is supported
             return std::forward<decltype(out)>(out);
@@ -163,8 +157,10 @@ struct FFT {
         });
 
         if (std::has_single_bit(size)) {
+            ensureRadix2Tables();
             transformRadix2(out);
         } else {
+            ensureBluesteinTable(size);
             transformBluestein(out);
         }
 
@@ -338,6 +334,21 @@ private:
         const ValueType scale = ValueType(1) / ValueType(m);
         std::transform(bCache.begin(), std::next(bCache.begin(), static_cast<std::ptrdiff_t>(n)), bluesteinExpTable.begin(), inPlace.begin(), //
             [scale](const TOutput& v, const TOutput& w) { return detail::complex_mult(std::conj(v) * scale, w); });
+    }
+
+    // the radix-2 tables are read by transformRadix2() alone and the Bluestein table by transformBluestein()
+    // alone, and both scale with fftSize (8 MiB of bit-reversal indices at N = 2^20), so build each only on
+    // the path that reads it. initAll() builds the radix-2 pair together, so bitReverseTable.size() keys both.
+    void ensureRadix2Tables() {
+        if (bitReverseTable.size() != fftSize) {
+            initAll();
+        }
+    }
+
+    void ensureBluesteinTable(std::size_t n) {
+        if (bluesteinExpTable.size() != n) {
+            precomputeBluesteinTable(n);
+        }
     }
 
     void precomputeTwiddleFactors() {
