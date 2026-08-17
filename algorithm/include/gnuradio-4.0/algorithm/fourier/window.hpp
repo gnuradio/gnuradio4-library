@@ -74,6 +74,11 @@ void create(ContainerType& container, Type windowFunction, const T beta = static
     if (n == 0) {
         return;
     }
+    // every cosine-sum window scales by 1/(n - 1); Kaiser rejects n <= 1 below
+    if (n == 1 && windowFunction != Type::Kaiser) {
+        container[0] = static_cast<T>(1);
+        return;
+    }
 
     using enum Type;
     switch (windowFunction) {
@@ -144,21 +149,23 @@ void create(ContainerType& container, Type windowFunction, const T beta = static
         return;
     }
     case FlatTop: {
-        // formula: w(n) = a0 - a1 * cos((2 * pi * n) / (N - 1)) + a2 * cos((4 * pi * n) / (N - 1)) - a3 * cos((6 * pi * n) / (N - 1)) + a4 * cos((8 * pi * n) / (N - 1))
+        // formula: w(n) = (a0 - a1 * cos((2 * pi * n) / (N - 1)) + a2 * cos((4 * pi * n) / (N - 1)) - a3 * cos((6 * pi * n) / (N - 1)) + a4 * cos((8 * pi * n) / (N - 1))) / sum(a)
         // reference: D'Antona, G., & Ferrero, A. (2006). Digital Signal Processing for Measurement Systems: Theory and Applications. Springer.
         const T a = pi2 / static_cast<T>(n - 1);
         std::ranges::transform(std::views::iota(0UL, n), container.begin(), [a](const auto i) {
             constexpr std::array<T, 5> coeff = {static_cast<T>(1.0), static_cast<T>(1.93), static_cast<T>(1.29), static_cast<T>(0.388), static_cast<T>(0.032)};
+            constexpr T                norm  = static_cast<T>(1) / (coeff[0] + coeff[1] + coeff[2] + coeff[3] + coeff[4]);
             const T                    ai    = a * static_cast<T>(i);
-            return coeff[0] - coeff[1] * std::cos(ai) + coeff[2] * std::cos(2 * ai) - coeff[3] * std::cos(3 * ai) + coeff[4] * std::cos(4 * ai);
+            return norm * (coeff[0] - coeff[1] * std::cos(ai) + coeff[2] * std::cos(2 * ai) - coeff[3] * std::cos(3 * ai) + coeff[4] * std::cos(4 * ai));
         });
         return;
     }
     case Exponential: {
-        // formula: w(n) = exp(n/a)
-        const T exp0 = std::exp(static_cast<T>(0.));
-        const T a    = static_cast<T>(3.) * static_cast<T>(n);
-        std::ranges::transform(std::views::iota(0UL, n), container.begin(), [a, exp0](const auto i) { return std::exp(static_cast<T>(i) / a) / exp0; });
+        // formula: w(n) = exp(-|n - (N-1)/2| / tau), tau = (N-1)/2 * (8.69/60) -- symmetric Poisson window decaying to -60 dB at the edges
+        // reference: Harris, F. J. (1978). On the use of windows for harmonic analysis with the discrete Fourier transform. Proceedings of the IEEE, 66(1), 51-83.
+        const T center = static_cast<T>(n - 1) / static_cast<T>(2);
+        const T tau    = center * static_cast<T>(8.69 / 60.);
+        std::ranges::transform(std::views::iota(0UL, n), container.begin(), [center, tau](const auto i) { return std::exp(-std::abs(static_cast<T>(i) - center) / tau); });
         return;
     }
     case Kaiser: {
@@ -200,10 +207,6 @@ requires std::is_floating_point_v<T>
     create(container, windowFunction, beta);
     return container;
 }
-
-// this is to speed-up typical instantiations
-template void create<std::vector<float>>(std::vector<float>& container, Type windowFunction, float beta);
-template void create<std::vector<double>>(std::vector<double>& container, Type windowFunction, double beta);
 
 } // namespace gr::algorithm::window
 
