@@ -248,8 +248,8 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
         std::array BlackmanRef{0.f, 0.09045342435f, 0.4591829575f, 0.9203636181f, 0.9203636181f, 0.4591829575f, 0.09045342435f, 0.f};
         std::array BlackmanHarrisRef{0.00006f, 0.03339172348f, 0.3328335043f, 0.8893697722f, 0.8893697722f, 0.3328335043f, 0.03339172348f, 0.00006f};
         std::array BlackmanNuttallRef{0.0003628f, 0.03777576895f, 0.34272762f, 0.8918518611f, 0.8918518611f, 0.34272762f, 0.03777576895f, 0.0003628f};
-        std::array ExponentialRef{1.f, 1.042546905f, 1.08690405f, 1.133148453f, 1.181360413f, 1.231623642f, 1.284025417f, 1.338656724f};
-        std::array FlatTopRef{0.004f, -0.1696424054f, 0.04525319348f, 3.622389212f, 3.622389212f, 0.04525319348f, -0.1696424054f, 0.004f};
+        std::array ExponentialRef{0.0010032727f, 0.0072136726f, 0.0518673257f, 0.3729334040f, 0.3729334040f, 0.0518673257f, 0.0072136726f, 0.0010032727f};
+        std::array FlatTopRef{0.0008620690f, -0.0365608632f, 0.0097528434f, 0.7806873302f, 0.7806873302f, 0.0097528434f, -0.0365608632f, 0.0008620690f};
         std::array HannExpRef{0.f, 0.611260467f, 0.950484434f, 0.1882550991f, 0.1882550991f, 0.950484434f, 0.611260467f, 0.f};
         std::array NuttallRef{0.f, 0.0311427368f, 0.3264168059f, 0.8876284573f, 0.8876284573f, 0.3264168059f, 0.0311427368f, 0.f};
         std::array KaiserRef{0.5714348848f, 0.7650986027f, 0.9113132365f, 0.9899091685f, 0.9899091685f, 0.9113132365f, 0.7650986027f, 0.5714348848f};
@@ -291,13 +291,42 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
         const auto w = create(window, 1024U);
         expect(eq(w.size(), 1024U));
 
-        if (window == Exponential || window == FlatTop || window == Blackman || window == Nuttall) {
+        if (window == FlatTop || window == Blackman || window == Nuttall) {
             return; // min max out of [0, 1] by design and/or numerical corner cases
         }
         const auto [min, max] = std::ranges::minmax_element(w);
         expect(ge(*min, 0.f)) << std::format("window {} min value\n", windowName);
         expect(le(*max, 1.f)) << std::format("window {} max value\n", windowName);
     } | magic_enum::enum_entries<gr::algorithm::window::Type>();
+
+    // every window is finite and symmetric and degenerates to a single unity tap at n == 1; at odd n the
+    // center tap is unity, except for HannExp which is double-lobed by construction
+    "window shape invariants"_test = []<typename T>() {
+        using enum gr::algorithm::window::Type;
+        for (const auto& entry : magic_enum::enum_entries<gr::algorithm::window::Type>()) {
+            const auto window     = entry.first;
+            const auto windowName = entry.second;
+            for (const std::size_t n : {1UZ, 2UZ, 3UZ, 64UZ, 65UZ}) {
+                if (window == Kaiser && n == 1UZ) {
+                    expect(throws<std::invalid_argument>([window] { std::ignore = create<T>(window, 1UZ); })) << "Kaiser rejects n == 1";
+                    continue;
+                }
+                const auto w = create<T>(window, n);
+                expect(eq(w.size(), n)) << std::format("<{}> {} n={} size", type_name<T>(), windowName, n);
+                expect(std::ranges::all_of(w, [](T v) { return std::isfinite(v); })) << std::format("<{}> {} n={} finite", type_name<T>(), windowName, n);
+                for (std::size_t i = 0; i < n; ++i) {
+                    expect(approx(static_cast<double>(w[i]), static_cast<double>(w[n - 1UZ - i]), 1.e-5)) << std::format("<{}> {} n={} symmetric at {}", type_name<T>(), windowName, n, i);
+                }
+                if (n == 1UZ) {
+                    expect(approx(static_cast<double>(w[0]), 1., 1.e-6)) << std::format("<{}> {} single tap is unity", type_name<T>(), windowName);
+                }
+                if (window != HannExp && (n % 2UZ) == 1UZ) {
+                    expect(approx(static_cast<double>(w[n / 2UZ]), 1., 1.e-5)) << std::format("<{}> {} n={} center tap is unity", type_name<T>(), windowName, n);
+                    expect(le(static_cast<double>(*std::ranges::max_element(w)), 1. + 1.e-5)) << std::format("<{}> {} n={} bounded by unity", type_name<T>(), windowName, n);
+                }
+            }
+        }
+    } | std::tuple<float, double>();
 
     "window corner cases"_test = []<typename T>() {
         static_assert(not magic_enum::enum_cast<gr::algorithm::window::Type>("UnknownWindow", magic_enum::case_insensitive).has_value());
