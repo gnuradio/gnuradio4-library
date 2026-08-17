@@ -45,6 +45,23 @@ boost::ut::suite<"SimdFFT Comprehensive"> _ = [] {
             })) << std::format("N={} should throw", invalidN);
         } | std::array{7UZ, 11UZ, 14UZ, 17UZ, 31UZ, 35UZ, 48UZ, 49UZ}; // primes and non-factorable
 
+        // the compile-time-sized constructor accepts every size canProcessSize() accepts
+        "compile-time sized construction"_test = [] {
+            SimdFFT<T, Transform::Complex, 64> c2c{};
+            SimdFFT<T, Transform::Real, 1024>  r2c{};
+            expect(eq(c2c.size(), 64UZ));
+            expect(eq(r2c.size(), 1024UZ));
+
+            std::vector<T, gr::allocator::Aligned<T>> in(128UZ);
+            std::vector<T, gr::allocator::Aligned<T>> out(128UZ);
+            in[0] = T(1);
+            c2c.transform(forward, ordered, in, out);
+            for (std::size_t k = 0UZ; k < 64UZ; ++k) {
+                expect(approx(out[2UZ * k], T(1), T(1e-4))) << std::format("delta spectrum bin {} real", k);
+                expect(approx(out[2UZ * k + 1UZ], T(0), T(1e-4))) << std::format("delta spectrum bin {} imag", k);
+            }
+        };
+
         using enum Transform;
         using enum Order;
         "sine-wave detection"_test =
