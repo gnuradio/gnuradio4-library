@@ -31,7 +31,7 @@ struct Config {
     std::size_t    maxRank           = std::numeric_limits<std::size_t>::max(); /// maximum singular values to keep
     T              relativeThreshold = std::numeric_limits<T>::epsilon();       /// minimum ratio σ_i/σ_0 to keep
     T              absoluteThreshold = std::numeric_limits<T>::epsilon();       /// minimum absolute σ_i to keep
-    T              energyFraction    = T{1};                                    /// fraction of total energy to retain (e.g. 0.95)
+    T              energyFraction    = static_cast<T>(0.95);                    /// fraction of total energy to retain (T{1} retains full rank, i.e. no denoising)
     T              hopFraction       = T{0.25};                                 /// SVD recomputation interval as fraction of windowSize
     BoundaryPolicy boundaryPolicy    = BoundaryPolicy::Default;                 /// initialisation / boundary handling
     T              defaultValue      = T{0};                                    /// fill value for BoundaryPolicy::Default
@@ -158,6 +158,16 @@ private:
 
     [[nodiscard]] bool needsLazyInit() const noexcept { return _config.boundaryPolicy != BoundaryPolicy::Default; }
 
+    /// computeSvdAndCache reads hopSize samples out of a windowSize-long buffer, so the hop must stay
+    /// inside the window; a NaN or negative fraction clamps to a single sample.
+    [[nodiscard]] static std::size_t computeHopSize(std::size_t windowSize, RealT hopFraction) noexcept {
+        const RealT hop = static_cast<RealT>(windowSize) * hopFraction;
+        if (!(hop >= RealT{1})) {
+            return 1UZ;
+        }
+        return std::min(static_cast<std::size_t>(hop), windowSize);
+    }
+
     void fillHistory(T value) {
         for (std::size_t i = 0UZ; i < _windowSize; ++i) {
             (void)i;
@@ -180,7 +190,7 @@ private:
     }
 
 public:
-    explicit SvdDenoiser(std::size_t windowSize = 64UZ, std::size_t hankelRows = 0UZ, const Config<RealT>& config = {}) : _windowSize(std::max(windowSize, 2UZ)), _hankelRows(hankelRows == 0UZ ? _windowSize / 2UZ : hankelRows), _hopSize(std::max(1UZ, static_cast<std::size_t>(static_cast<RealT>(_windowSize) * config.hopFraction))), _config(config), _history(_windowSize), _initialized(!needsLazyInit()) {
+    explicit SvdDenoiser(std::size_t windowSize = 64UZ, std::size_t hankelRows = 0UZ, const Config<RealT>& config = {}) : _windowSize(std::max(windowSize, 2UZ)), _hankelRows(hankelRows == 0UZ ? _windowSize / 2UZ : hankelRows), _hopSize(computeHopSize(_windowSize, config.hopFraction)), _config(config), _history(_windowSize), _initialized(!needsLazyInit()) {
         _outputCache.reserve(_hopSize);
         if (_config.boundaryPolicy == BoundaryPolicy::Default) {
             fillHistory(static_cast<T>(_config.defaultValue));
@@ -221,7 +231,7 @@ public:
     void setParameters(std::size_t windowSize, std::size_t hankelRows = 0UZ, const Config<RealT>& config = {}) {
         _windowSize = std::max(windowSize, 2UZ);
         _hankelRows = hankelRows == 0UZ ? _windowSize / 2UZ : hankelRows;
-        _hopSize    = std::max(1UZ, static_cast<std::size_t>(static_cast<RealT>(_windowSize) * config.hopFraction));
+        _hopSize    = computeHopSize(_windowSize, config.hopFraction);
         _config     = config;
         _history.resize(_windowSize);
         _outputCache.reserve(_hopSize);
@@ -230,7 +240,7 @@ public:
 
     void setConfig(const Config<RealT>& config) {
         _config  = config;
-        _hopSize = std::max(1UZ, static_cast<std::size_t>(static_cast<RealT>(_windowSize) * _config.hopFraction));
+        _hopSize = computeHopSize(_windowSize, _config.hopFraction);
         reset();
     }
 };
