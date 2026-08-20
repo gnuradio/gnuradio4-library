@@ -199,6 +199,26 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
         }
     } | ComplexTypesToTest{};
 
+    // unnormalized convention: backward(forward(x)) == N*x, across the SimdFFT, radix-2 and Bluestein paths
+    "forward/backward round-trip"_test = []<typename TVal>() {
+        using Cplx = std::complex<TVal>;
+        gr::algorithm::FFT<Cplx, Cplx>                                     forwardFft{};
+        gr::algorithm::FFT<Cplx, Cplx, gr::algorithm::Direction::Backward> backwardFft{};
+
+        const double tolerance = std::is_same_v<TVal, float> ? 1.e-4 : 1.e-12;
+        for (const std::size_t n : {8UZ, 12UZ, 16UZ, 64UZ, 100UZ, 257UZ, 1024UZ}) {
+            const auto signal    = deterministicComplexSignal<Cplx>(n);
+            const auto spectrum  = forwardFft.compute(signal);
+            const auto roundTrip = backwardFft.compute(spectrum);
+
+            std::vector<std::complex<double>> expected(n);
+            for (std::size_t i = 0; i < n; ++i) {
+                expected[i] = std::complex<double>(static_cast<double>(signal[i].real()), static_cast<double>(signal[i].imag())) * static_cast<double>(n);
+            }
+            expect(lt(relativeL2Error(roundTrip, expected), tolerance)) << std::format("<{}> n={} round-trip relative L2 error {}", type_name<TVal>(), n, relativeL2Error(roundTrip, expected));
+        }
+    } | std::tuple<float, double>();
+
     // amplitude scaling: 1/N over the full spectrum, 2/N over the half spectrum except at DC and Nyquist
     "magnitude spectrum scaling"_test = []<typename TVal>() {
         using Cplx                               = std::complex<TVal>;
