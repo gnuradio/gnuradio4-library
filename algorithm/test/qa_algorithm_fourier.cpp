@@ -219,6 +219,26 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
         }
     } | std::tuple<float, double>();
 
+    // one instance interleaving transform lengths matches a dedicated instance per length, bit for bit, over
+    // more distinct lengths than the plan cache holds and across the SimdFFT, radix-2 and Bluestein paths
+    "interleaved transform lengths"_test = []<typename T>() {
+        using InType = typename T::InType;
+        typename T::AlgoType interleaved{};
+
+        constexpr std::array lengths{1024UZ, 8UZ, 1009UZ, 4096UZ, 100UZ};
+        for (std::size_t round = 0UZ; round < 3UZ; ++round) {
+            for (const std::size_t n : lengths) {
+                const auto           signal = generateSinSample<InType>(n, static_cast<double>(n), 5., 1.);
+                typename T::AlgoType dedicated{};
+                const auto           expected = dedicated.compute(signal);
+                const auto           actual   = interleaved.compute(signal);
+
+                expect(eq(actual.size(), n)) << std::format("<{}> n={} output size", type_name<T>(), n);
+                expect(std::ranges::equal(actual, expected)) << std::format("<{}> n={} round={} interleaved matches a dedicated instance", type_name<T>(), n, round);
+            }
+        }
+    } | AllTypesToTest{};
+
     // amplitude scaling: 1/N over the full spectrum, 2/N over the half spectrum except at DC and Nyquist
     "magnitude spectrum scaling"_test = []<typename TVal>() {
         using Cplx                               = std::complex<TVal>;

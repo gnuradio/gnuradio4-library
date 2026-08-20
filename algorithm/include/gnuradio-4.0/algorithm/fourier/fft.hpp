@@ -99,8 +99,8 @@ constexpr void fft_stage_kernel(C* data, const C* twiddles, std::size_t halfsize
  * Direction::Forward instance into a Direction::Backward one of the same length returns N times the
  * input. Real-valued input (R2C) is forward-only.
  *
- * compute() mutates per-instance scratch (SimdFFT state, aligned buffers, Bluestein caches):
- * hold one instance per thread.
+ * compute() mutates per-instance scratch (SimdFFT state, aligned buffers, Bluestein caches, the
+ * per-length plan cache): hold one instance per thread.
  */
 template<typename TInput, gr::meta::complex_like TOutput = std::conditional_t<gr::meta::complex_like<TInput>, TInput, std::complex<TInput>>, Direction TDirection = Direction::Forward>
 requires((gr::meta::complex_like<TInput> || std::floating_point<TInput>))
@@ -141,7 +141,7 @@ struct FFT {
             return std::forward<decltype(out)>(out);
         }
 
-        fftSize = size;
+        selectPlan(size);
 
         if (useSimdFFT && SimdFFT<ValueType, kTransform>::canProcessSize(size, Order::Ordered) && trySimdFFT(in, out)) { // use SimdFFT if enabled and size is supported
             return std::forward<decltype(out)>(out);
@@ -349,6 +349,73 @@ private:
         if (bluesteinExpTable.size() != n) {
             precomputeBluesteinTable(n);
         }
+    }
+
+    struct Plan {
+        std::size_t                                               size{0UZ};
+        SimdFFT<ValueType, kTransform>                            simdFFT{};
+        std::vector<ValueType, gr::allocator::Aligned<ValueType>> alignedInputBuffer{};
+        std::vector<ValueType, gr::allocator::Aligned<ValueType>> alignedOutputBuffer{};
+        std::vector<std::vector<TOutput>>                         stageTwiddles{};
+        std::vector<std::size_t>                                  bitReverseTable{};
+        std::vector<TOutput, gr::allocator::Aligned<TOutput>>     bluesteinExpTable{};
+        std::vector<TOutput, gr::allocator::Aligned<TOutput>>     bluesteinChirpFFT{};
+        std::unique_ptr<FFT<TOutput, TOutput>>                    fftCache{};
+        std::vector<TOutput, gr::allocator::Aligned<TOutput>>     aCache{};
+        std::vector<TOutput, gr::allocator::Aligned<TOutput>>     bCache{};
+    };
+
+    // a parked plan holds the whole per-length state, ~16 MB at N = 2^20 for complex<float>, so the count is
+    // capped instead of grown: three parked plus the live one covers the interleavings that occur in practice,
+    // and a further length evicts the least recently used plan rather than enlarging the footprint
+    static constexpr std::size_t kMaxParkedPlans = 3UZ;
+    std::vector<Plan>            parkedPlans{};
+
+    void swapPlan(Plan& plan) {
+        std::swap(simdFFT, plan.simdFFT);
+        alignedInputBuffer.swap(plan.alignedInputBuffer);
+        alignedOutputBuffer.swap(plan.alignedOutputBuffer);
+        stageTwiddles.swap(plan.stageTwiddles);
+        bitReverseTable.swap(plan.bitReverseTable);
+        bluesteinExpTable.swap(plan.bluesteinExpTable);
+        bluesteinChirpFFT.swap(plan.bluesteinChirpFFT);
+        fftCache.swap(plan.fftCache);
+        aCache.swap(plan.aCache);
+        bCache.swap(plan.bCache);
+    }
+
+    // the slot that yields the incoming plan takes the outgoing one, so a cached length change is a plain swap
+    void selectPlan(std::size_t size) {
+        if (size == fftSize) {
+            return;
+        }
+        if (fftSize == 0UZ) {
+            fftSize = size;
+            return;
+        }
+
+        const std::size_t nParked = parkedPlans.size();
+        std::size_t       slot    = nParked;
+        for (std::size_t i = 0UZ; i < nParked; ++i) {
+            if (parkedPlans[i].size == size) {
+                slot = i;
+                break;
+            }
+        }
+        if (slot == nParked) {
+            if (nParked < kMaxParkedPlans) {
+                parkedPlans.emplace_back();
+            } else {
+                slot = 0UZ;
+            }
+        }
+
+        swapPlan(parkedPlans[slot]);
+        parkedPlans[slot].size = fftSize;
+
+        const auto parked = std::next(parkedPlans.begin(), static_cast<std::ptrdiff_t>(slot));
+        std::rotate(parked, std::next(parked), parkedPlans.end());
+        fftSize = size;
     }
 
     void precomputeTwiddleFactors() {
