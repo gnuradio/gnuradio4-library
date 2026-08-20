@@ -29,7 +29,7 @@ struct FFTAlgoPrecision<T> {
     using type = typename T::value_type;
 };
 
-template<typename T, template<typename...> typename Algorithm>
+template<typename T>
 void testFFT() {
     using namespace benchmark;
     using namespace boost::ut;
@@ -39,7 +39,7 @@ void testFFT() {
 
     using PrecisionType = std::remove_cv_t<typename FFTAlgoPrecision<T>::type>;
     using OutputType    = std::complex<PrecisionType>;
-    using FFTAlgo       = Algorithm<T, OutputType>;
+    using FFTAlgo       = FFT<T, OutputType>;
 
     for (std::size_t N : {512UZ, 1024UZ, 8192UZ, 65536UZ, 1009UZ /* prime */}) {
         constexpr int         nRepetitions{1000};
@@ -71,15 +71,8 @@ void testFFT() {
 }
 
 inline const boost::ut::suite<"FFT forward tests"> _fft_bm_tests = [] {
-    using namespace gr::algorithm;
-
-    auto testAll = [&]<typename... Ts>(auto /*types*/) { //
-        auto testForType = []<typename T>() {
-            ([]<template<typename, typename> typename Algo>() { testFFT<T, Algo>(); }.template operator()<FFT>()); //
-        };
-        (testForType.template operator()<Ts>(), ...);
-    };
-    testAll.operator()<std::complex<float>, std::complex<double>, float, double>(0);
+    auto testAll = []<typename... Ts>() { (testFFT<Ts>(), ...); };
+    testAll.operator()<std::complex<float>, std::complex<double>, float, double>();
     std::println("N.B. ops/s values are scaled with N*log(N).");
 };
 

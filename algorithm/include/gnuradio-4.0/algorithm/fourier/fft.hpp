@@ -1,6 +1,7 @@
 #ifndef GNURADIO_ALGORITHM_FFT_HPP
 #define GNURADIO_ALGORITHM_FFT_HPP
 
+#include <algorithm>
 #include <bit>
 #include <complex>
 #include <execution>
@@ -21,7 +22,8 @@ constexpr T complex_mult(T a, T b) {
     return a * b; // SIMD optimisation candidate
 }
 
-template<gr::meta::complex_like C, std::size_t N = std::dynamic_extent>
+// the fixed-size kernels carry their own twiddles and therefore need the direction; the generic one reads the (already direction-correct) table
+template<gr::meta::complex_like C, std::size_t N = std::dynamic_extent, bool inverse = false>
 constexpr void fft_stage_kernel(C* data, const C* twiddles, std::size_t halfsize = 0UZ) {
     using ValueType = typename C::value_type;
 
@@ -32,9 +34,10 @@ constexpr void fft_stage_kernel(C* data, const C* twiddles, std::size_t halfsize
         data[0] = a + b;
         data[1] = a - b;
     } else if constexpr (N == 4UZ) {
+        constexpr ValueType        wImag     = inverse ? ValueType(1) : ValueType(-1);
         constexpr std::array<C, 2> twiddles4 = {
-            C{1, 0},  // W_4^0
-            C{0, -1}, // W_4^1 == -j
+            C{ValueType(1), ValueType(0)}, // W_4^0
+            C{ValueType(0), wImag},        // W_4^1 == -j (forward)
         };
         const C a = data[0];
         const C b = data[1];
@@ -48,11 +51,13 @@ constexpr void fft_stage_kernel(C* data, const C* twiddles, std::size_t halfsize
     } else if constexpr (N == 8UZ) {
         constexpr auto inv_sqrt2 = static_cast<ValueType>(1 / std::numbers::sqrt2_v<ValueType>); // std::sqrt(0.5f)
 
+        constexpr ValueType        wImag     = inverse ? inv_sqrt2 : -inv_sqrt2;
+        constexpr ValueType        wImagUnit = inverse ? ValueType(1) : ValueType(-1);
         constexpr std::array<C, 4> twiddles8 = {//
-            C{1, 0},                            //
-            C{inv_sqrt2, -inv_sqrt2},           //
-            C{0, -1},                           //
-            C{-inv_sqrt2, -inv_sqrt2}};
+            C{ValueType(1), ValueType(0)},      //
+            C{inv_sqrt2, wImag},                //
+            C{ValueType(0), wImagUnit},         //
+            C{-inv_sqrt2, wImag}};
 
         const C a0 = data[0];
         const C a1 = data[1];
@@ -86,7 +91,14 @@ constexpr void fft_stage_kernel(C* data, const C* twiddles, std::size_t halfsize
 
 } // namespace detail
 
-template<typename TInput, gr::meta::complex_like TOutput = std::conditional_t<gr::meta::complex_like<TInput>, TInput, std::complex<TInput>>>
+/**
+ * @brief radix-2 / Bluestein DFT with an optional SimdFFT backend, for any transform length.
+ *
+ * Transforms are unnormalized, matching SimdFFT's convention: feeding the output of a
+ * Direction::Forward instance into a Direction::Backward one of the same length returns N times the
+ * input. Real-valued input (R2C) is forward-only.
+ */
+template<typename TInput, gr::meta::complex_like TOutput = std::conditional_t<gr::meta::complex_like<TInput>, TInput, std::complex<TInput>>, Direction TDirection = Direction::Forward>
 requires((gr::meta::complex_like<TInput> || std::floating_point<TInput>))
 struct FFT {
     using ValueType = typename TOutput::value_type;
@@ -97,8 +109,10 @@ struct FFT {
     std::vector<std::size_t>                              bitReverseTable{};
     std::size_t                                           fftSize{0};
 
-    constexpr static Transform kTransform = gr::meta::complex_like<TInput> && gr::meta::complex_like<TOutput> ? Transform::Complex : Transform::Real;
-    constexpr static Direction kDirection = kTransform == Transform::Complex ? Direction::Forward : std::is_arithmetic_v<TInput> && gr::meta::complex_like<TOutput> ? algorithm::Direction::Forward : algorithm::Direction::Backward;
+    constexpr static Transform kTransform = gr::meta::complex_like<TInput> ? Transform::Complex : Transform::Real;
+    constexpr static Direction kDirection = TDirection;
+    constexpr static bool      kInverse   = kDirection == Direction::Backward;
+    static_assert(kTransform == Transform::Complex || kDirection == Direction::Forward, "real-valued input (R2C) supports the forward transform only");
 
     mutable SimdFFT<ValueType, kTransform>                            simdFFT{};
     mutable std::vector<ValueType, gr::allocator::Aligned<ValueType>> alignedInputBuffer{};
@@ -165,12 +179,9 @@ struct FFT {
         }
         if constexpr (kTransform == Transform::Complex) {
             return trySimdFFT_C2C(in, out, in.size());
-        } else if constexpr (kDirection == Direction::Forward) {
+        } else {
             return trySimdFFT_R2C(in, out, in.size());
-        } else if constexpr (kDirection == Direction::Backward) {
-            return trySimdFFT_C2R(in, out, in.size());
         }
-        return false;
     }
 
 private:
@@ -257,62 +268,6 @@ private:
         return true;
     }
 
-    bool trySimdFFT_C2R(const auto& in, auto&& out, std::size_t N) const {
-        using InComplex = typename std::remove_cvref_t<decltype(in)>::value_type;  // std::complex<Tin>
-        using OutScalar = typename std::remove_cvref_t<decltype(out)>::value_type; // e.g. float/double
-        static_assert(std::is_trivially_copyable_v<InComplex>);
-        static_assert(std::is_trivially_copyable_v<ValueType>);
-
-        assert((N % 2) == 0);
-        assert(std::size(in) >= N);
-        assert(std::size(out) >= N);
-
-        if (alignedInputBuffer.size() != N) {
-            alignedInputBuffer.resize(N); // ValueType
-        }
-        if (alignedOutputBuffer.size() != N) {
-            alignedOutputBuffer.resize(N); // ValueType
-        }
-
-        // --- pack: N complex → [DC, Nyquist, re1, im1, re2, im2, ...] as ValueType ---
-        alignedInputBuffer[0] = static_cast<ValueType>(in[0].real());
-        alignedInputBuffer[1] = static_cast<ValueType>(in[N / 2].real());
-        for (std::size_t k = 1; k < N / 2; ++k) {
-            alignedInputBuffer[2 * k + 0] = static_cast<ValueType>(in[k].real());
-            alignedInputBuffer[2 * k + 1] = static_cast<ValueType>(in[k].imag());
-        }
-
-        // --- choose output target for the backend ---
-        ValueType* outUse    = nullptr;
-        bool       directOut = false;
-
-        if constexpr (std::is_same_v<OutScalar, ValueType>) {
-            if (gr::allocator::isAligned(out.data(), 64UZ)) { // can write directly into the user buffer
-                outUse    = out.data();                       // zero-copy output
-                directOut = true;
-            } else {
-                outUse = alignedOutputBuffer.data(); // align-required scratch
-            }
-        } else { // different scalar type -> need to write to output scratch buffer, then convert
-            outUse = alignedOutputBuffer.data();
-        }
-
-        simdFFT.template transform<kDirection, Order::Ordered>(std::span<const ValueType>{alignedInputBuffer.data(), N}, std::span<ValueType>{outUse, N}); // transform: N packed (ValueType) → N real (ValueType)
-
-        if constexpr (std::is_same_v<OutScalar, ValueType>) {
-            if (!directOut) {
-                // same type → memcpy is optimal; alignment not required for byte copy
-                std::memcpy(out.data(), alignedOutputBuffer.data(), N * sizeof(ValueType));
-            }
-        } else { // type conversion needed
-            for (std::size_t i = 0; i < N; ++i) {
-                out[i] = static_cast<OutScalar>(alignedOutputBuffer[i]);
-            }
-        }
-
-        return true;
-    }
-
     void transformRadix2(std::ranges::input_range auto& inPlace) const {
         const std::size_t N = inPlace.size();
         if (!std::has_single_bit(N)) {
@@ -335,9 +290,9 @@ private:
                 TOutput* block = &inPlace[i];
 
                 switch (size) { // optimised non-branching fft sub kernels
-                case 2: detail::fft_stage_kernel<TOutput, 2>(block, twiddles.data()); break;
-                case 4: detail::fft_stage_kernel<TOutput, 4>(block, twiddles.data()); break;
-                case 8: detail::fft_stage_kernel<TOutput, 8>(block, twiddles.data()); break;
+                case 2: detail::fft_stage_kernel<TOutput, 2, kInverse>(block, twiddles.data()); break;
+                case 4: detail::fft_stage_kernel<TOutput, 4, kInverse>(block, twiddles.data()); break;
+                case 8: detail::fft_stage_kernel<TOutput, 8, kInverse>(block, twiddles.data()); break;
                 default: // generic case
                     detail::fft_stage_kernel<TOutput>(block, twiddles.data(), halfsize);
                     break;
@@ -380,9 +335,9 @@ private:
             [scale](const TOutput& v, const TOutput& w) { return detail::complex_mult(std::conj(v) * scale, w); });
     }
 
-    void precomputeTwiddleFactors(bool inverse = false) {
+    void precomputeTwiddleFactors() {
         stageTwiddles.clear();
-        const auto minus2Pi = ValueType(inverse ? 2 : -2) * std::numbers::pi_v<ValueType>;
+        const auto minus2Pi = ValueType(kInverse ? 2 : -2) * std::numbers::pi_v<ValueType>;
         for (std::size_t size = 2UZ; size <= fftSize; size *= 2UZ) {
             const std::size_t    m{size / 2};
             const TOutput        w{std::exp(TOutput(0., minus2Pi / static_cast<ValueType>(size)))};
@@ -394,6 +349,9 @@ private:
                 twiddles.emplace_back(std::sqrt(0.5), -std::sqrt(0.5));  // W_8^1
                 twiddles.emplace_back(0.0, -1.0);                        // W_8^2
                 twiddles.emplace_back(-std::sqrt(0.5), -std::sqrt(0.5)); // W_8^3
+                if constexpr (kInverse) {
+                    std::ranges::transform(twiddles, twiddles.begin(), [](const TOutput& t) { return std::conj(t); });
+                }
             } else {
                 TOutput wk{1., 0.};
                 for (std::size_t j = 0UZ; j < m; ++j) {
@@ -405,11 +363,11 @@ private:
         }
     }
 
-    void precomputeBluesteinTable(std::size_t n, bool inverse = false) {
+    void precomputeBluesteinTable(std::size_t n) {
         bluesteinExpTable.resize(n);
         for (std::size_t i = 0; i < n; ++i) {
             const std::uintmax_t tmp   = static_cast<std::uintmax_t>(i) * i % (2 * n);
-            const ValueType      angle = ValueType(inverse ? 1 : -1) * std::numbers::pi_v<ValueType> * static_cast<ValueType>(tmp) / static_cast<ValueType>(n);
+            const ValueType      angle = ValueType(kInverse ? 1 : -1) * std::numbers::pi_v<ValueType> * static_cast<ValueType>(tmp) / static_cast<ValueType>(n);
             bluesteinExpTable[i]       = std::polar<ValueType>(1.0, angle);
         }
 
