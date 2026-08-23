@@ -21,6 +21,12 @@ option(ENABLE_COVERAGE "Enable coverage target generation" OFF)
 option(WARNINGS_AS_ERRORS "Enable -Werror flags" ON)
 option(GR_USE_FETCHCONTENT_DEPS "Allow CMake to download selected third-party dependencies with FetchContent" OFF)
 option(USE_CCACHE "Use ccache if available" ON)
+
+# Test executables check correctness; a lower optimization level roughly halves their compile time and peak RSS.
+# Benchmarks pin their own level. Empty keeps the build type's default.
+set(GR_QA_OPTIMIZATION_LEVEL
+    "-O1"
+    CACHE STRING "Optimization level for test executables in optimized build types (empty = build-type default)")
 set(GR_HTTP_ENABLED OFF)
 
 # limit parallel compile/link jobs to prevent OOM with template-heavy TUs, override with -DGR_BUILD_PARALLEL_LEVEL=<N>
