@@ -32,9 +32,9 @@ namespace gr::algorithm::window {
  * Implementation of window function (also known as an apodization function or tapering function).
  * See Wikipedia for more info: https://en.wikipedia.org/wiki/Window_function
  */
-enum class Type : int { None, Rectangular, Hamming, Hann, HannExp, Blackman, Nuttall, BlackmanHarris, BlackmanNuttall, FlatTop, Exponential, Kaiser };
+enum class Type : int { None, Rectangular, Hamming, Hann, Blackman, Nuttall, BlackmanHarris, BlackmanNuttall, FlatTop, Exponential, Kaiser };
 using enum Type;
-inline static constexpr gr::meta::fixed_string TypeNames = "[None, Rectangular, Hamming, Hann, HannExp, Blackman, Nuttall, BlackmanHarris, BlackmanNuttall, FlatTop, Exponential, Kaiser]";
+inline static constexpr gr::meta::fixed_string TypeNames = "[None, Rectangular, Hamming, Hann, Blackman, Nuttall, BlackmanHarris, BlackmanNuttall, FlatTop, Exponential, Kaiser]";
 
 namespace detail {
 template<typename T>
@@ -99,11 +99,6 @@ void create(ContainerType& container, Type windowFunction, const T beta = static
         // reference: von Hann, J. (1901). Über den Durchgang einer elektrischen Welle längs der Erdoberfläche. Elektrische Nachrichtentechnik, 17, 421-424.
         const T a = pi2 / static_cast<T>(n - 1);
         std::ranges::transform(std::views::iota(0UL, n), container.begin(), [a](const auto i) { return static_cast<T>(.5) - static_cast<T>(.5) * std::cos(a * static_cast<T>(i)); });
-        return;
-    }
-    case HannExp: {
-        const T a = pi2 / static_cast<T>(n - 1);
-        std::ranges::transform(std::views::iota(0UL, n), container.begin(), [a](const auto i) { return std::pow(std::sin(a * static_cast<T>(i)), static_cast<T>(2.)); });
         return;
     }
     case Blackman: {
