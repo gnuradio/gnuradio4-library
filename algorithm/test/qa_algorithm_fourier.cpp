@@ -250,7 +250,6 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
         std::array BlackmanNuttallRef{0.0003628f, 0.03777576895f, 0.34272762f, 0.8918518611f, 0.8918518611f, 0.34272762f, 0.03777576895f, 0.0003628f};
         std::array ExponentialRef{0.0010032727f, 0.0072136726f, 0.0518673257f, 0.3729334040f, 0.3729334040f, 0.0518673257f, 0.0072136726f, 0.0010032727f};
         std::array FlatTopRef{0.0008620690f, -0.0365608632f, 0.0097528434f, 0.7806873302f, 0.7806873302f, 0.0097528434f, -0.0365608632f, 0.0008620690f};
-        std::array HannExpRef{0.f, 0.611260467f, 0.950484434f, 0.1882550991f, 0.1882550991f, 0.950484434f, 0.611260467f, 0.f};
         std::array NuttallRef{0.f, 0.0311427368f, 0.3264168059f, 0.8876284573f, 0.8876284573f, 0.3264168059f, 0.0311427368f, 0.f};
         std::array KaiserRef{0.5714348848f, 0.7650986027f, 0.9113132365f, 0.9899091685f, 0.9899091685f, 0.9113132365f, 0.7650986027f, 0.5714348848f};
 
@@ -265,7 +264,6 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
         expect(equalVectors(create<T>(BlackmanNuttall, 8), BlackmanNuttallRef)) << std::format("<{}> equal BlackmanNuttall vector {} vs. ref: {}", type_name<T>(), create<T>(BlackmanNuttall, 8), BlackmanNuttallRef);
         expect(equalVectors(create<T>(Exponential, 8), ExponentialRef)) << std::format("<{}> equal Exponential vector {} vs. ref: {}", type_name<T>(), create<T>(Exponential, 8), ExponentialRef);
         expect(equalVectors(create<T>(FlatTop, 8), FlatTopRef)) << std::format("<{}> equal FlatTop vector {} vs. ref: {}", type_name<T>(), create<T>(FlatTop, 8), FlatTopRef);
-        expect(equalVectors(create<T>(HannExp, 8), HannExpRef)) << std::format("<{}> equal HannExp vector {} vs. ref: {}", type_name<T>(), create<T>(HannExp, 8), HannExpRef);
         expect(equalVectors(create<T>(Nuttall, 8), NuttallRef)) << std::format("<{}> equal Nuttall vector {} vs. ref: {}", type_name<T>(), create<T>(Nuttall, 8), NuttallRef);
         expect(equalVectors(create<T>(Kaiser, 8), KaiserRef)) << std::format("<{}> equal Kaiser vector {} vs. ref: {}", type_name<T>(), create<T>(Kaiser, 8), KaiserRef);
 
@@ -279,7 +277,6 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
         expect(eq(create<T>(BlackmanNuttall, 0).size(), 0u)) << std::format("<{}> zero size BlackmanNuttall vectors", type_name<T>());
         expect(eq(create<T>(Exponential, 0).size(), 0u)) << std::format("<{}> zero size Exponential vectors", type_name<T>());
         expect(eq(create<T>(FlatTop, 0).size(), 0u)) << std::format("<{}> zero size FlatTop vectors", type_name<T>());
-        expect(eq(create<T>(HannExp, 0).size(), 0u)) << std::format("<{}> zero size HannExp vectors", type_name<T>());
         expect(eq(create<T>(Nuttall, 0).size(), 0u)) << std::format("<{}> zero size Nuttall vectors", type_name<T>());
         expect(eq(create<T>(Kaiser, 0).size(), 0u)) << std::format("<{}> zero size Kaiser vectors", type_name<T>());
     } | std::tuple<float, double>();
@@ -300,7 +297,7 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
     } | magic_enum::enum_entries<gr::algorithm::window::Type>();
 
     // every window is finite and symmetric and degenerates to a single unity tap at n == 1; at odd n the
-    // center tap is unity, except for HannExp which is double-lobed by construction
+    // center tap is unity
     "window shape invariants"_test = []<typename T>() {
         using enum gr::algorithm::window::Type;
         for (const auto& entry : magic_enum::enum_entries<gr::algorithm::window::Type>()) {
@@ -320,7 +317,7 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
                 if (n == 1UZ) {
                     expect(approx(static_cast<double>(w[0]), 1., 1.e-6)) << std::format("<{}> {} single tap is unity", type_name<T>(), windowName);
                 }
-                if (window != HannExp && (n % 2UZ) == 1UZ) {
+                if ((n % 2UZ) == 1UZ) {
                     expect(approx(static_cast<double>(w[n / 2UZ]), 1., 1.e-5)) << std::format("<{}> {} n={} center tap is unity", type_name<T>(), windowName, n);
                     expect(le(static_cast<double>(*std::ranges::max_element(w)), 1. + 1.e-5)) << std::format("<{}> {} n={} bounded by unity", type_name<T>(), windowName, n);
                 }
@@ -330,6 +327,9 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
 
     "window corner cases"_test = []<typename T>() {
         static_assert(not magic_enum::enum_cast<gr::algorithm::window::Type>("UnknownWindow", magic_enum::case_insensitive).has_value());
+        // Hann has a single spelling in this set. The name below evaluated sin^2 over two periods across
+        // its own span, which is zero at the center and peaks a bin off DC in the transform.
+        static_assert(not magic_enum::enum_cast<gr::algorithm::window::Type>("HannExp", magic_enum::case_insensitive).has_value());
         expect(throws<std::invalid_argument>([] { std::ignore = create(gr::algorithm::window::Type::Kaiser, 1); })) << "invalid Kaiser window size";
         expect(throws<std::invalid_argument>([] { std::ignore = create(gr::algorithm::window::Type::Kaiser, 2, -1.f); })) << "invalid Kaiser window beta";
     } | std::tuple<float, double>();
