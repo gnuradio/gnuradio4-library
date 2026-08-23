@@ -88,8 +88,8 @@ void create(ContainerType& container, Type windowFunction, const T beta = static
         return;
     }
     case Hamming: {
-        // formula: w(n) = 0.54 - 0.46 * cos((2 * pi * n) / (N - 1))
-        // reference: Hamming, R. W. (1977). Digital filters. Prentice-Hall.
+        // formula: w(n) = 0.53836 - 0.46164 * cos((2 * pi * n) / (N - 1))
+        // equiripple-optimal coefficients; the textbook 0.54/0.46 rounding raises the peak sidelobe by ~0.5 dB
         const T a = pi2 / static_cast<T>(n - 1);
         std::ranges::transform(std::views::iota(0UL, n), container.begin(), [a](const auto i) { return static_cast<T>(0.53836) - static_cast<T>(0.46164) * std::cos(a * static_cast<T>(i)); });
         return;
