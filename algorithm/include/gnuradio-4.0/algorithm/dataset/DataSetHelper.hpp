@@ -193,21 +193,32 @@ template<typename T>
         return handleFailure("found 0 or negative extent values [{}]", gr::join(ds.extents));
     }
 
-    // check axis-related sizes: axisCount() == extents.size() == axis_units.size() == axis_values.size()
-    if (ds.nDimensions() != ds.axisCount() || ds.axisCount() != ds.axis_units.size() || ds.axisCount() != ds.axis_values.size()) {
-        return handleFailure("nDimensions()={}, axisCount()={}, axis_units.size()={}, axis_values.size()={}", ds.nDimensions(), ds.axisCount(), ds.axis_units.size(), ds.axis_values.size());
-    }
+    // check axis-related sizes: axisCount() == extents.size() == axis_units.size() == axis_values.size().
+    // a record may also carry no axis at all — a packet's payload index is not a physical axis —
+    // in which case every axis-related vector is empty and the per-axis checks are moot
+    if (ds.axisCount() == 0UZ) {
+        if (!ds.axis_units.empty() || !ds.axis_values.empty()) {
+            return handleFailure("axis-free record carries axis_units.size()={}, axis_values.size()={}", ds.axis_units.size(), ds.axis_values.size());
+        }
+    } else {
+        if (ds.nDimensions() != ds.axisCount() || ds.axisCount() != ds.axis_units.size() || ds.axisCount() != ds.axis_values.size()) {
+            return handleFailure("nDimensions()={}, axisCount()={}, axis_units.size()={}, axis_values.size()={}", ds.nDimensions(), ds.axisCount(), ds.axis_units.size(), ds.axis_values.size());
+        }
 
-    // for each axis index i, check axisValues(i).size() == extents[i]
-    for (std::size_t i = 0UZ; i < ds.extents.size(); i++) {
-        if (ds.axis_values[i].size() != static_cast<std::size_t>(ds.extents[i])) {
-            return handleFailure("axisValues({}) size={} != extents[{}]={}", i, ds.axis_values[i].size(), i, ds.extents[i]);
+        // for each axis index i, check axisValues(i).size() == extents[i]
+        for (std::size_t i = 0UZ; i < ds.extents.size(); i++) {
+            if (ds.axis_values[i].size() != static_cast<std::size_t>(ds.extents[i])) {
+                return handleFailure("axisValues({}) size={} != extents[{}]={}", i, ds.axis_values[i].size(), i, ds.extents[i]);
+            }
         }
     }
 
-    // check the number of signals matches all signal-related arrays
-    const std::size_t n_signals = ds.size();
-    if (n_signals != ds.signal_names.size() || n_signals != ds.signal_quantities.size() || n_signals != ds.signal_units.size() || n_signals != ds.signal_ranges.size()) {
+    // check the number of signals matches the signal-related arrays; the descriptive arrays —
+    // quantities, units, ranges — may each also be absent altogether (a payload carries none of
+    // them), but a partially filled one is inconsistent
+    const std::size_t n_signals    = ds.size();
+    const auto        absentOrFull = [n_signals](const auto& v) { return v.empty() || v.size() == n_signals; };
+    if (!absentOrFull(ds.signal_quantities) || !absentOrFull(ds.signal_units) || !absentOrFull(ds.signal_ranges)) {
         return handleFailure(" ds.size()={}, signal_names.size()={}, signal_quantities.size()={}, signal_units.size()={}, signal_ranges.size()={}", n_signals, ds.signal_names.size(), ds.signal_quantities.size(), ds.signal_units.size(), ds.signal_ranges.size());
     }
 
