@@ -7,6 +7,10 @@ project(
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# No target in this tree declares a C++20 module, so dependency scanning would only add a preprocessor pass per
+# translation unit; disable it until a module exists to discover.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
