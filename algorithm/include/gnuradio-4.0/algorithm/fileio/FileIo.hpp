@@ -1376,6 +1376,30 @@ inline void runDownloadEmscripten(std::shared_ptr<WriterState> state) {
     if (emscripten_is_main_runtime_thread()) {
         return std::unexpected(gr::Error{"fileio::write() can not be called from main thread, it is not allowed to block main WASM thread"});
     }
+#else
+    // a local write runs on the calling thread: routing it through the shared I/O pool and
+    // waiting parks the caller on a task that a pool occupied by long-lived tasks (socket
+    // senders, watchdogs) never schedules — a deadlock for the scheduler thread calling the
+    // blocking API. Only genuinely asynchronous transports take the pool round-trip.
+    const auto uriKind = detail::classifyUri(uri);
+    if (uriKind == detail::UriKind::LocalPath || uriKind == detail::UriKind::FileUri || uriKind == detail::UriKind::DownloadUri) {
+        std::expected<std::string, gr::Error> pathExp;
+        if (uriKind == detail::UriKind::DownloadUri) {
+            const auto filenameExp = detail::stripDownloadUri(uri);
+            if (!filenameExp.has_value()) {
+                return std::unexpected(filenameExp.error());
+            }
+            pathExp = detail::resolveDownloadPath(filenameExp.value());
+        } else {
+            pathExp = detail::toLocalPath(uri);
+        }
+        if (!pathExp.has_value()) {
+            return std::unexpected(pathExp.error());
+        }
+        auto state = std::make_shared<WriterState>(pathExp.value(), config);
+        state->data.assign(data.begin(), data.end());
+        return runWriteLocalFile(std::move(state));
+    }
 #endif
 
     auto writerExp = writeAsync(uri, data, config);
