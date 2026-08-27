@@ -7,6 +7,7 @@
 #include <gnuradio-4.0/meta/formatter.hpp>
 
 #include <gnuradio-4.0/algorithm/dataset/DataSetEstimators.hpp>
+#include <gnuradio-4.0/algorithm/dataset/DataSetHelper.hpp>
 #include <gnuradio-4.0/algorithm/dataset/DataSetMath.hpp>
 #include <gnuradio-4.0/algorithm/dataset/DataSetTestFunctions.hpp>
 
@@ -638,5 +639,31 @@ const boost::ut::suite<"DataSet<T> filter"> _dataSetFilter = [] {
 };
 
 #pragma GCC diagnostic pop
+
+const boost::ut::suite<"DataSet consistency checks"> _dataSetConsistency = [] {
+    using namespace boost::ut;
+
+    "checkConsistency admits an axis-free record"_test = [] {
+        // the packet convention's minimal shape: samples, one extent, one signal name, one
+        // metadata map, one timing-events slot — no axis and no descriptive arrays
+        gr::DataSet<std::uint8_t> packet;
+        packet.signal_values = {1U, 2U, 3U};
+        packet.extents       = {3};
+        packet.signal_names.emplace_back("payload");
+        packet.meta_information.resize(1UZ);
+        packet.timing_events.resize(1UZ);
+        expect(gr::dataset::checkConsistency(packet).has_value()) << "the minimal axis-free record validates; a payload carries no axis, quantity, unit or range";
+
+        packet.signal_ranges.resize(2UZ); // a partially filled descriptive array is inconsistent, not unspecified
+        expect(!gr::dataset::checkConsistency(packet).has_value());
+        packet.signal_ranges.resize(1UZ);
+        packet.signal_quantities.resize(1UZ);
+        packet.signal_units.resize(1UZ);
+        expect(gr::dataset::checkConsistency(packet).has_value()) << "one entry per signal is the fully specified form";
+
+        packet.axis_names.emplace_back("time"); // an axis name without units or values is inconsistent, not axis-free
+        expect(!gr::dataset::checkConsistency(packet).has_value());
+    };
+};
 
 int main() { /* not needed for UT */ }
