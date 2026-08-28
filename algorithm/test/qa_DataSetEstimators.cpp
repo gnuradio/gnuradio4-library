@@ -664,6 +664,25 @@ const boost::ut::suite<"DataSet consistency checks"> _dataSetConsistency = [] {
         packet.axis_names.emplace_back("time"); // an axis name without units or values is inconsistent, not axis-free
         expect(!gr::dataset::checkConsistency(packet).has_value());
     };
+
+    "updateMinMax reduces per signal, component-wise for complex"_test = [] {
+        gr::DataSet<float> two;
+        two.signal_names  = {"a", "b"};
+        two.extents       = {3};
+        two.signal_values = {0.f, 2.f, 1.f, 10.f, 12.f, 11.f};
+        gr::dataset::updateMinMax(two);
+        expect(eq(two.signal_ranges.size(), 2UZ));
+        expect(eq(two.signal_ranges[0].min, 0.f) and eq(two.signal_ranges[0].max, 2.f)) << "signal a's range must come from signal a alone";
+        expect(eq(two.signal_ranges[1].min, 10.f) and eq(two.signal_ranges[1].max, 12.f)) << "signal b's range must come from signal b alone";
+
+        gr::DataSet<std::complex<float>> z;
+        z.signal_names  = {"z"};
+        z.extents       = {2};
+        z.signal_values = {{1.f, 5.f}, {-3.f, 2.f}};
+        gr::dataset::updateMinMax(z);
+        expect(eq(z.signal_ranges.size(), 1UZ));
+        expect(z.signal_ranges[0].min == std::complex<float>(-3.f, 2.f) and z.signal_ranges[0].max == std::complex<float>(1.f, 5.f)) << "a complex range is the component-wise extremes, not samples ordered by magnitude";
+    };
 };
 
 int main() { /* not needed for UT */ }

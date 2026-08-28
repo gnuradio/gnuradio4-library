@@ -261,23 +261,6 @@ template<DataSetLike TDataSet>
     return true;
 }
 
-template<typename T>
-void updateMinMax(DataSet<T>& dataSet) {
-    if constexpr (std::is_arithmetic_v<T>) {
-        const auto [min, max]        = std::ranges::minmax_element(dataSet.signal_values);
-        dataSet.signal_ranges[0].min = *min;
-        dataSet.signal_ranges[0].max = *max;
-    } else if constexpr (gr::meta::complex_like<T>) {
-        const auto [min, max] = std::ranges::minmax_element(dataSet.signal_values, //
-            [](const T& a, const T& b) { return std::abs(a) < std::abs(b); });
-
-        dataSet.signal_ranges[0].min = *min;
-        dataSet.signal_ranges[0].max = *max;
-    } else {
-        static_assert(std::is_arithmetic_v<T> || std::is_same_v<T, std::complex<typename T::value_type>>, "Unsupported type for DataSet");
-    }
-}
-
 template<typename T, typename... TDataSets>
 DataSet<T> merge(const DataSet<T>& first, const TDataSets&... others) {
     DataSet<T> mergedDataSet;

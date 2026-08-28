@@ -240,6 +240,39 @@ template<typename T>
     return {};
 }
 
+/// observed min/max, one range per signal; for complex types the range is component-wise —
+/// the real and imaginary extremes independently — which Range<T> can represent faithfully,
+/// where samples ordered by magnitude cannot
+template<typename T>
+void updateMinMax(DataSet<T>& dataSet) {
+    static_assert(std::is_arithmetic_v<T> || gr::meta::complex_like<T>, "Unsupported type for DataSet");
+    const std::size_t nSignals = dataSet.size();
+    dataSet.signal_ranges.resize(nSignals);
+    for (std::size_t i = 0UZ; i < nSignals; ++i) {
+        const std::span<const T> values = dataSet.signalValues(i);
+        if (values.empty()) {
+            continue;
+        }
+        if constexpr (std::is_arithmetic_v<T>) {
+            const auto [min, max]        = std::ranges::minmax_element(values);
+            dataSet.signal_ranges[i].min = *min;
+            dataSet.signal_ranges[i].max = *max;
+        } else {
+            using TValue = typename T::value_type;
+            TValue reMin = values[0].real(), reMax = values[0].real();
+            TValue imMin = values[0].imag(), imMax = values[0].imag();
+            for (const T& v : values) {
+                reMin = std::min(reMin, v.real());
+                reMax = std::max(reMax, v.real());
+                imMin = std::min(imMin, v.imag());
+                imMax = std::max(imMax, v.imag());
+            }
+            dataSet.signal_ranges[i].min = T{reMin, imMin};
+            dataSet.signal_ranges[i].max = T{reMax, imMax};
+        }
+    }
+}
+
 } // namespace gr::dataset
 
 #endif // DATASETHELPER_HPP
