@@ -56,8 +56,10 @@ struct GaussianNoise {
 
     void fill(std::span<F> out, F amplitude = F(1), F offset = F(0)) noexcept {
         auto s0 = _rng._state[0], s1 = _rng._state[1], s2 = _rng._state[2], s3 = _rng._state[3];
-        bool hasSpare = false;
-        F    spare{};
+        // the polar method yields variates in pairs, so a call ending on an odd count leaves a spare; resuming
+        // from it keeps the draw sequence the same however the stream is split into calls
+        bool hasSpare = _hasSpare;
+        F    spare    = _spare;
         for (auto& sample : out) {
             if (hasSpare) {
                 hasSpare = false;
