@@ -2,8 +2,10 @@
 
 #include <cmath>
 #include <complex>
+#include <format>
 #include <numeric>
 #include <print>
+#include <span>
 #include <vector>
 
 #include <gnuradio-4.0/algorithm/rng/GaussianNoise.hpp>
@@ -56,6 +58,39 @@ const boost::ut::suite noiseGeneratorTests = [] {
         GaussianNoise<double> g2(rng2);
         for (int i = 0; i < 1000; ++i) {
             expect(eq(g1(), g2())) << std::format("mismatch at {}", i);
+        }
+    };
+
+    // the polar method yields variates in pairs, so a call that ends on an odd count leaves a spare. fill()
+    // must resume from it: opening at 'false' while still writing the state back made an odd-sized split draw a
+    // different sequence than one call, which every seeded model built on this generator depends on not happening
+    "bulk fills are chunk independent"_test = [] {
+        constexpr std::size_t nSamples = 64UZ;
+
+        const auto viaFill = [](std::size_t chunk) {
+            Xoshiro256pp         rng(12345);
+            GaussianNoise<float> gauss(rng);
+            std::vector<float>   out(nSamples);
+            for (std::size_t i = 0UZ; i < nSamples; i += chunk) {
+                gauss.fill(std::span<float>(out.data() + i, std::min(chunk, nSamples - i)));
+            }
+            return out;
+        };
+        const auto viaFillComplex = [](std::size_t chunk) {
+            Xoshiro256pp                     rng(12345);
+            GaussianNoise<float>             gauss(rng);
+            std::vector<std::complex<float>> out(nSamples);
+            for (std::size_t i = 0UZ; i < nSamples; i += chunk) {
+                gauss.fillComplex(std::span<std::complex<float>>(out.data() + i, std::min(chunk, nSamples - i)));
+            }
+            return out;
+        };
+
+        const auto reference        = viaFill(nSamples);
+        const auto referenceComplex = viaFillComplex(nSamples);
+        for (const std::size_t chunk : {1UZ, 2UZ, 3UZ, 5UZ, 8UZ, 17UZ}) {
+            expect(viaFill(chunk) == reference) << std::format("fill in {}-sample calls must match one call", chunk);
+            expect(viaFillComplex(chunk) == referenceComplex) << std::format("fillComplex in {}-sample calls must match one call", chunk);
         }
     };
 
