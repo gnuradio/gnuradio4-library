@@ -11,6 +11,7 @@ ARG CMAKE_BUILD_TYPE=RelWithDebInfo
 ARG CMAKE_FLAGS="-DADDRESS_SANITIZER=OFF"
 ARG CC=gcc
 ARG CXX=g++
+ARG SDK_TARGET=native
 
 WORKDIR /src/gnuradio4-library
 COPY . .
@@ -19,7 +20,16 @@ ENV CC=${CC} \
     CXX=${CXX} \
     CMAKE_EXPORT_COMPILE_COMMANDS=ON
 
-RUN cmake -S . -B /build/gnuradio4-library \
+RUN set -eux; \
+    system_node="$(command -v node || true)"; \
+    if [ "${SDK_TARGET}" = emscripten ]; then \
+      configure_command="emcmake cmake"; \
+      cross_flags="-DCMAKE_FIND_ROOT_PATH=/opt/gnuradio4 -DCMAKE_CROSSCOMPILING_EMULATOR=${system_node}"; \
+    else \
+      configure_command="cmake"; \
+      cross_flags=""; \
+    fi; \
+    ${configure_command} -S . -B /build/gnuradio4-library \
       -DCMAKE_COLOR_DIAGNOSTICS=ON \
       -DDISABLE_EXTERNAL_DEPS_WARNINGS=ON \
       -DCMAKE_PREFIX_PATH=/opt/gnuradio4 \
@@ -28,18 +38,29 @@ RUN cmake -S . -B /build/gnuradio4-library \
       -DUSE_CCACHE=OFF \
       -DENABLE_EXAMPLES=OFF \
       -DENABLE_TESTING=OFF \
+      ${cross_flags} \
       ${CMAKE_FLAGS} \
     && cmake --build /build/gnuradio4-library --parallel \
     && cmake --install /build/gnuradio4-library \
+    && if [ "${SDK_TARGET}" = emscripten ]; then \
+      emcmake cmake -S test_external/minimal_consumer -B /build/minimal-consumer \
+        -DCMAKE_PREFIX_PATH=/opt/gnuradio4 \
+        -DCMAKE_FIND_ROOT_PATH=/opt/gnuradio4 \
+        -DCMAKE_CROSSCOMPILING_EMULATOR="${system_node}" \
+      && cmake --build /build/minimal-consumer --parallel \
+      && "${system_node}" /build/minimal-consumer/gnuradio4_library_consumer.js; \
+    fi \
     && mkdir -p /opt/gnuradio4/share/gnuradio4-library-sdk \
-    && printf 'git_sha=%s\nprefix=/opt/gnuradio4\ncore_sdk_image=%s\ncmake_build_type=%s\ncmake_flags=%s\n' \
-      "${GIT_SHA}" "ghcr.io/${CORE_SDK_OWNER}/gnuradio4-core-sdk:${CORE_SDK_TAG}" "${CMAKE_BUILD_TYPE}" "${CMAKE_FLAGS}" \
+    && if [ "${SDK_TARGET}" = emscripten ]; then emscripten_version="$(emcc -dumpversion)"; else emscripten_version=none; fi \
+    && printf 'git_sha=%s\nprefix=/opt/gnuradio4\ncore_sdk_image=%s\nsdk_target=%s\nemscripten_version=%s\ncmake_build_type=%s\ncmake_flags=%s\n' \
+      "${GIT_SHA}" "ghcr.io/${CORE_SDK_OWNER}/gnuradio4-core-sdk:${CORE_SDK_TAG}" "${SDK_TARGET}" "${emscripten_version}" "${CMAKE_BUILD_TYPE}" "${CMAKE_FLAGS}" \
       > /opt/gnuradio4/share/gnuradio4-library-sdk/manifest
 
 FROM ghcr.io/${CORE_SDK_OWNER}/gnuradio4-core-sdk:${CORE_SDK_TAG} AS sdk
 
 ARG GIT_SHA=unknown
 ARG REPOSITORY_URL=https://github.com/gnuradio/gnuradio4-library
+ARG SDK_TARGET=native
 
 LABEL org.opencontainers.image.source="${REPOSITORY_URL}" \
       org.opencontainers.image.revision="${GIT_SHA}" \
@@ -49,6 +70,7 @@ LABEL org.opencontainers.image.source="${REPOSITORY_URL}" \
 COPY --from=builder /opt/gnuradio4 /opt/gnuradio4
 
 ENV GNURADIO4_PREFIX=/opt/gnuradio4 \
+    GR4_SDK_TARGET=${SDK_TARGET} \
     CMAKE_PREFIX_PATH=/opt/gnuradio4 \
     LD_LIBRARY_PATH=/opt/gnuradio4/lib:/opt/gnuradio4/lib64:${LD_LIBRARY_PATH} \
     PATH=/opt/gnuradio4/bin:${PATH}
