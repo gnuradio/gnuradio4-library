@@ -1029,7 +1029,11 @@ struct Writer {
         }
     }
 
+    // The final flush happens in close(), so a full disk or a failing device is reported here or nowhere.
     out.close();
+    if (!out) {
+        return std::unexpected(gr::Error{std::format("runWriteLocalFile: failed to flush and close file: {}", path.string())});
+    }
     return WriteResult{}; // For local files, responseBody stays empty and httpStatus stays 0.
 }
 
