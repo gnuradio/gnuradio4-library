@@ -999,6 +999,34 @@ struct FilterSpec {
 /// @brief A complex band-stop from @p spec: either edge may be negative.
 [[nodiscard]] inline std::vector<std::complex<float>> designComplexBandstop(const FilterSpec& spec) { return complexBandstop(tapCountOf(spec, 5), spec.cutoff / spec.sampleRate, spec.highCutoff / spec.sampleRate, windowOf(spec), spec.gain); }
 
+/**
+ * @brief Split a prototype into `arms` branches, branch-major and reversed.
+ *
+ * Branch `b` holds `p[(Lb - 1 - m)*arms + b]`, so `sum_m branch[m] * x[i + m]` is the zero-stuffed convolution
+ * evaluated at output phase `b`. The prototype is zero-padded to an even branch length, which puts the interpolated
+ * instant at `base + Lb/2 - 1 + mu`.
+ *
+ * This is the layout an interpolating bank wants, where one branch is chosen per output. A channelizer runs every
+ * branch on every step and reads the prototype in its natural `h[j*M + r]` order instead, which is contiguous in
+ * both the taps and the history and needs no separate copy.
+ */
+[[nodiscard]] inline std::vector<float> polyphasePartition(std::span<const float> prototype, std::size_t arms) {
+    if (arms == 0UZ) {
+        throw std::invalid_argument("gr::filter::fir::design::polyphasePartition: a polyphase bank needs at least one branch");
+    }
+    std::size_t branchLength = std::max((prototype.size() + arms - 1UZ) / arms, 2UZ);
+    branchLength += branchLength % 2UZ;
+
+    std::vector<float> branches(arms * branchLength, 0.f);
+    for (std::size_t branch = 0UZ; branch < arms; ++branch) {
+        for (std::size_t m = 0UZ; m < branchLength; ++m) {
+            const std::size_t at                = (branchLength - 1UZ - m) * arms + branch;
+            branches[branch * branchLength + m] = at < prototype.size() ? prototype[at] : 0.f;
+        }
+    }
+    return branches;
+}
+
 } // namespace gr::filter::fir::design
 
 #endif // GNURADIO_ALGORITHM_FILTER_DESIGN_HPP
