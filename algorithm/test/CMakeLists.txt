@@ -40,6 +40,7 @@ add_ut_test(qa_Golay)
 add_ut_test(qa_Hamming)
 add_ut_test(qa_ReedSolomon)
 add_ut_test(qa_Bch)
+add_ut_test(qa_Convolutional)
 
 if(EMSCRIPTEN)
   # Simple HTTP server used only for unit tests.
@@ -91,6 +92,7 @@ target_link_libraries(qa_Golay PRIVATE gnuradio-algorithm)
 target_link_libraries(qa_Hamming PRIVATE gnuradio-algorithm)
 target_link_libraries(qa_ReedSolomon PRIVATE gnuradio-algorithm)
 target_link_libraries(qa_Bch PRIVATE gnuradio-algorithm)
+target_link_libraries(qa_Convolutional PRIVATE gnuradio-algorithm)
 
 add_executable(example_ImChart example_ImChart.cpp)
 target_link_libraries(example_ImChart PRIVATE gnuradio-algorithm)
