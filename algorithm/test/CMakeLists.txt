@@ -3,6 +3,10 @@ add_ut_test(qa_GaussianNoise)
 add_ut_test(qa_NoiseGenerator)
 add_ut_test(qa_ToneGenerator)
 add_ut_test(qa_SignalGeneratorCore)
+add_ut_test(qa_Phasor)
+# includes the fourier layer for the spur measurement, so it needs the same inliner depth as the other tests that reach
+# SimdFFT
+gr_pin_test_optimization(qa_Phasor -O2)
 add_ut_test(qa_algorithm_fourier)
 # SimdFFT's always_inline helpers need the inliner depth -O2 provides; at -O1 the unresolved indirect call is a hard
 # error. Applies to both tests that include it.
@@ -47,6 +51,7 @@ target_link_libraries(qa_GaussianNoise PRIVATE gnuradio-algorithm)
 target_link_libraries(qa_NoiseGenerator PRIVATE gnuradio-algorithm)
 target_link_libraries(qa_ToneGenerator PRIVATE gnuradio-algorithm)
 target_link_libraries(qa_SignalGeneratorCore PRIVATE gnuradio-algorithm)
+target_link_libraries(qa_Phasor PRIVATE gnuradio-algorithm)
 target_link_libraries(qa_algorithm_fourier PRIVATE gnuradio-algorithm)
 target_link_libraries(qa_DataSetEstimators PRIVATE gnuradio-algorithm)
 target_link_libraries(qa_FilterDesign PRIVATE gnuradio-algorithm)
