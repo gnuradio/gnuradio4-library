@@ -1,6 +1,7 @@
 #include <array>
 #include <cassert>
 #include <format>
+#include <limits>
 #include <numbers>
 #include <numeric>
 #include <string_view>
@@ -76,6 +77,68 @@ bool equalVectors(const T& v1, const U& v2, double tolerance = std::is_same_v<ty
         return std::ranges::equal(v1, v2, [&tolerance](const auto& l, const auto& r) { return std::abs(static_cast<double>(l) - static_cast<double>(r)) < tolerance; });
     }
 }
+
+// Window figures of merit, all recomputed from the coefficients rather than quoted.
+// The transform is |DFT(w)| zero-padded to nFft; the main lobe is bounded by descending from the transform's
+// peak to the first local minimum and the peak sidelobe level is the highest point beyond it, relative to the
+// peak. ENBW is N sum(w^2)/(sum w)^2 and the coherent gain is sum(w)/N -- these three answer the spectral
+// analysis question. The stopband attenuation answers the FIR design question instead and is a property of the
+// filter, not of the window: a sinc lowpass at 0.25 cycles/sample windowed with w and scaled to unit DC gain,
+// read as the highest |H| beyond the first stopband null. The two differ by up to 17 dB and neither substitutes
+// for the other.
+namespace windowMetrics {
+
+[[nodiscard]] inline std::vector<double> magnitudeSpectrum(const std::vector<double>& coefficients, std::size_t nFft) {
+    static gr::algorithm::FFT<double> fft; // one instance: the plan for a given length is built once
+    std::vector<double>               padded(nFft, 0.);
+    std::ranges::copy(coefficients, padded.begin());
+    const auto          spectrum = fft.compute(padded);
+    std::vector<double> magnitude(nFft / 2UZ + 1UZ);
+    for (std::size_t k = 0UZ; k < magnitude.size(); ++k) {
+        magnitude[k] = std::abs(spectrum[k]);
+    }
+    return magnitude;
+}
+
+[[nodiscard]] inline double peakSidelobeDb(const std::vector<double>& coefficients, std::size_t nFft) {
+    const auto        magnitude = magnitudeSpectrum(coefficients, nFft);
+    const std::size_t peak      = static_cast<std::size_t>(std::ranges::max_element(magnitude) - magnitude.begin());
+    std::size_t       edge      = peak;
+    while (edge + 1UZ < magnitude.size() && magnitude[edge + 1UZ] < magnitude[edge]) {
+        ++edge;
+    }
+    return 20. * std::log10(*std::max_element(magnitude.begin() + static_cast<std::ptrdiff_t>(edge), magnitude.end()) / magnitude[peak]);
+}
+
+[[nodiscard]] inline double enbw(const std::vector<double>& coefficients) {
+    const double sum       = std::accumulate(coefficients.begin(), coefficients.end(), 0.);
+    const double sumSquare = std::inner_product(coefficients.begin(), coefficients.end(), coefficients.begin(), 0.);
+    return static_cast<double>(coefficients.size()) * sumSquare / (sum * sum);
+}
+
+[[nodiscard]] inline double coherentGain(const std::vector<double>& coefficients) { return std::accumulate(coefficients.begin(), coefficients.end(), 0.) / static_cast<double>(coefficients.size()); }
+
+[[nodiscard]] inline double stopbandAttenuationDb(const std::vector<double>& coefficients, std::size_t nFft) {
+    constexpr double    fc     = 0.25; // cycles/sample, the sinc's own argument and therefore the -6 dB point
+    const std::size_t   n      = coefficients.size();
+    const double        center = static_cast<double>(n - 1UZ) / 2.;
+    std::vector<double> taps(n);
+    for (std::size_t i = 0UZ; i < n; ++i) {
+        const double x = 2. * fc * (static_cast<double>(i) - center);
+        taps[i]        = 2. * fc * (x == 0. ? 1. : std::sin(std::numbers::pi * x) / (std::numbers::pi * x)) * coefficients[i];
+    }
+    const double dcGain = std::accumulate(taps.begin(), taps.end(), 0.);
+    std::ranges::transform(taps, taps.begin(), [dcGain](double tap) { return tap / dcGain; });
+
+    const auto  magnitude = magnitudeSpectrum(taps, nFft);
+    std::size_t nullBin   = static_cast<std::size_t>(fc * static_cast<double>(nFft));
+    while (nullBin + 1UZ < magnitude.size() && magnitude[nullBin + 1UZ] < magnitude[nullBin]) { // descend to the first stopband null
+        ++nullBin;
+    }
+    return -20. * std::log10(*std::max_element(magnitude.begin() + static_cast<std::ptrdiff_t>(nullBin), magnitude.end()));
+}
+
+} // namespace windowMetrics
 
 template<typename TInput, typename TOutput, template<typename, typename> typename TAlgo>
 struct TestTypes {
@@ -318,6 +381,11 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
         std::array FlatTopRef{0.f, -0.0358150410f, 0.0092233033f, 0.7815529111f, 0.7815529111f, 0.0092233033f, -0.0358150410f, 0.f};
         std::array NuttallRef{0.f, 0.0311427368f, 0.3264168059f, 0.8876284573f, 0.8876284573f, 0.3264168059f, 0.0311427368f, 0.f};
         std::array KaiserRef{0.5714348848f, 0.7650986027f, 0.9113132365f, 0.9899091685f, 0.9899091685f, 0.9113132365f, 0.7650986027f, 0.5714348848f};
+        std::array BartlettRef{0.f, 0.2857142857f, 0.5714285714f, 0.8571428571f, 0.8571428571f, 0.5714285714f, 0.2857142857f, 0.f};
+        std::array WelchRef{0.f, 0.4897959184f, 0.8163265306f, 0.9795918367f, 0.9795918367f, 0.8163265306f, 0.4897959184f, 0.f};
+        std::array ParzenRef{0.00390625f, 0.10546875f, 0.47265625f, 0.91796875f, 0.91796875f, 0.47265625f, 0.10546875f, 0.00390625f};
+        std::array TukeyRef{0.f, 0.6112604670f, 1.f, 1.f, 1.f, 1.f, 0.6112604670f, 0.f};
+        std::array GaussianRef{0.0439369336f, 0.2030327963f, 0.5632793505f, 0.9382155957f, 0.9382155957f, 0.5632793505f, 0.2030327963f, 0.0439369336f};
 
         // check all windows for unwanted changes
         using enum gr::algorithm::window::Type;
@@ -332,6 +400,11 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
         expect(equalVectors(create<T>(FlatTop, 8), FlatTopRef)) << std::format("<{}> equal FlatTop vector {} vs. ref: {}", type_name<T>(), create<T>(FlatTop, 8), FlatTopRef);
         expect(equalVectors(create<T>(Nuttall, 8), NuttallRef)) << std::format("<{}> equal Nuttall vector {} vs. ref: {}", type_name<T>(), create<T>(Nuttall, 8), NuttallRef);
         expect(equalVectors(create<T>(Kaiser, 8), KaiserRef)) << std::format("<{}> equal Kaiser vector {} vs. ref: {}", type_name<T>(), create<T>(Kaiser, 8), KaiserRef);
+        expect(equalVectors(create<T>(Bartlett, 8), BartlettRef)) << std::format("<{}> equal Bartlett vector {} vs. ref: {}", type_name<T>(), create<T>(Bartlett, 8), BartlettRef);
+        expect(equalVectors(create<T>(Welch, 8), WelchRef)) << std::format("<{}> equal Welch vector {} vs. ref: {}", type_name<T>(), create<T>(Welch, 8), WelchRef);
+        expect(equalVectors(create<T>(Parzen, 8), ParzenRef)) << std::format("<{}> equal Parzen vector {} vs. ref: {}", type_name<T>(), create<T>(Parzen, 8), ParzenRef);
+        expect(equalVectors(create<T>(Tukey, 8), TukeyRef)) << std::format("<{}> equal Tukey vector {} vs. ref: {}", type_name<T>(), create<T>(Tukey, 8), TukeyRef);
+        expect(equalVectors(create<T>(Gaussian, 8), GaussianRef)) << std::format("<{}> equal Gaussian vector {} vs. ref: {}", type_name<T>(), create<T>(Gaussian, 8), GaussianRef);
 
         // test zero length
         expect(eq(create<T>(None, 0).size(), 0u)) << std::format("<{}> zero size None vectors", type_name<T>());
@@ -345,6 +418,11 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
         expect(eq(create<T>(FlatTop, 0).size(), 0u)) << std::format("<{}> zero size FlatTop vectors", type_name<T>());
         expect(eq(create<T>(Nuttall, 0).size(), 0u)) << std::format("<{}> zero size Nuttall vectors", type_name<T>());
         expect(eq(create<T>(Kaiser, 0).size(), 0u)) << std::format("<{}> zero size Kaiser vectors", type_name<T>());
+        expect(eq(create<T>(Bartlett, 0).size(), 0u)) << std::format("<{}> zero size Bartlett vectors", type_name<T>());
+        expect(eq(create<T>(Welch, 0).size(), 0u)) << std::format("<{}> zero size Welch vectors", type_name<T>());
+        expect(eq(create<T>(Parzen, 0).size(), 0u)) << std::format("<{}> zero size Parzen vectors", type_name<T>());
+        expect(eq(create<T>(Tukey, 0).size(), 0u)) << std::format("<{}> zero size Tukey vectors", type_name<T>());
+        expect(eq(create<T>(Gaussian, 0).size(), 0u)) << std::format("<{}> zero size Gaussian vectors", type_name<T>());
     } | std::tuple<float, double>();
 
     "basic window tests"_test = [](auto& val) {
@@ -362,14 +440,14 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
         expect(le(*max, 1.f)) << std::format("window {} max value\n", windowName);
     } | magic_enum::enum_entries<gr::algorithm::window::Type>();
 
-    // every window is finite and symmetric and degenerates to a single unity tap at n == 1; at odd n the
-    // center tap is unity
+    // every window is finite and degenerates to a single unity tap at n == 1; at odd n the center tap is unity,
+    // which the high-pass and band-stop deltas depend on: they keep their center tap through the window
     "window shape invariants"_test = []<typename T>() {
         using enum gr::algorithm::window::Type;
         for (const auto& entry : magic_enum::enum_entries<gr::algorithm::window::Type>()) {
             const auto window     = entry.first;
             const auto windowName = entry.second;
-            for (const std::size_t n : {1UZ, 2UZ, 3UZ, 64UZ, 65UZ}) {
+            for (const std::size_t n : {1UZ, 2UZ, 3UZ, 64UZ, 65UZ, 1023UZ}) {
                 if (window == Kaiser && n == 1UZ) {
                     expect(throws<std::invalid_argument>([window] { std::ignore = create<T>(window, 1UZ); })) << "Kaiser rejects n == 1";
                     continue;
@@ -377,9 +455,6 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
                 const auto w = create<T>(window, n);
                 expect(eq(w.size(), n)) << std::format("<{}> {} n={} size", type_name<T>(), windowName, n);
                 expect(std::ranges::all_of(w, [](T v) { return std::isfinite(v); })) << std::format("<{}> {} n={} finite", type_name<T>(), windowName, n);
-                for (std::size_t i = 0; i < n; ++i) {
-                    expect(approx(static_cast<double>(w[i]), static_cast<double>(w[n - 1UZ - i]), 1.e-5)) << std::format("<{}> {} n={} symmetric at {}", type_name<T>(), windowName, n, i);
-                }
                 if (n == 1UZ) {
                     expect(approx(static_cast<double>(w[0]), 1., 1.e-6)) << std::format("<{}> {} single tap is unity", type_name<T>(), windowName);
                 }
@@ -403,6 +478,164 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
             expect(std::ranges::equal(aliased, hann)) << std::format("<{}> n={} HannExp coefficients equal Hann", type_name<T>(), n);
         }
     } | std::tuple<float, double>();
+
+    // the second half of every window is the mirrored first half, so its symmetry is bit-exact rather than
+    // within a rounding of it: 1 - abs(i - M)/M evaluated at mirrored i is not bit-identical for all n, and a
+    // windowed FIR is exactly linear phase only if the window is exactly symmetric
+    "window symmetry is bit-exact"_test = []<typename T>() {
+        for (const auto& [window, windowName] : magic_enum::enum_entries<gr::algorithm::window::Type>()) {
+            for (const std::size_t n : {2UZ, 3UZ, 8UZ, 9UZ, 64UZ, 65UZ, 255UZ, 1023UZ}) {
+                const auto w         = create<T>(window, n);
+                bool       symmetric = true;
+                for (std::size_t i = 0UZ; i < n / 2UZ; ++i) {
+                    symmetric = symmetric && (w[i] == w[n - 1UZ - i]);
+                }
+                expect(symmetric) << std::format("<{}> {} n={} is bit-exactly symmetric", type_name<T>(), windowName, n);
+            }
+        }
+    } | std::tuple<float, double>();
+
+    // Bartlett, Welch and Hann are exactly zero at both ends; Parzen's ends are 2/N^3 because its radius
+    // divides by N/2 rather than by N - 1, which is what the bound below allows for
+    "window endpoints"_test = [] {
+        using enum gr::algorithm::window::Type;
+        for (const std::size_t n : {3UZ, 9UZ, 64UZ, 1023UZ}) {
+            for (const auto window : {Bartlett, Welch, Hann}) {
+                const auto w = create<double>(window, n);
+                expect(eq(w.front(), 0.)) << std::format("{} n={} starts at zero", magic_enum::enum_name(window), n);
+                expect(eq(w.back(), 0.)) << std::format("{} n={} ends at zero", magic_enum::enum_name(window), n);
+            }
+            const auto   parzen   = create<double>(Parzen, n);
+            const double expected = 2. / (static_cast<double>(n) * static_cast<double>(n) * static_cast<double>(n));
+            expect(approx(parzen.front() / expected, 1., 1e-9)) << std::format("Parzen n={} ends at 2/N^3 = {:e}, is {:e}", n, expected, parzen.front());
+        }
+        for (const std::size_t n : {2UZ, 9UZ, 1023UZ}) {
+            expect(std::ranges::all_of(create<double>(Rectangular, n), [](double v) { return v == 1.; })) << std::format("Rectangular n={} is exactly one everywhere", n);
+        }
+    };
+
+    // alpha = 0 and alpha = 1 are the endpoints of the taper: both must be reachable and both exact
+    "Tukey degenerates to Rectangular and to Hann"_test = [] {
+        using enum gr::algorithm::window::Type;
+        for (const std::size_t n : {9UZ, 64UZ, 1023UZ}) {
+            expect(std::ranges::equal(create<double>(Tukey, n, 0.), create<double>(Rectangular, n))) << std::format("Tukey(0) n={} equals Rectangular bit-exactly", n);
+            expect(equalVectors(create<double>(Tukey, n, 1.), create<double>(Hann, n), 1e-12)) << std::format("Tukey(1) n={} equals Hann", n);
+        }
+    };
+
+    // the shape parameter is one scalar carrying four different quantities; NaN asks for the window's own default
+    "window parameter validation"_test = [] {
+        using enum gr::algorithm::window::Type;
+        expect(throws<std::invalid_argument>([] { std::ignore = create<double>(Tukey, 64UZ, -0.1); })) << "Tukey alpha below zero";
+        expect(throws<std::invalid_argument>([] { std::ignore = create<double>(Tukey, 64UZ, 1.1); })) << "Tukey alpha above one";
+        expect(throws<std::invalid_argument>([] { std::ignore = create<double>(Gaussian, 64UZ, 0.); })) << "Gaussian sigma at zero";
+        expect(throws<std::invalid_argument>([] { std::ignore = create<double>(Gaussian, 64UZ, 0.51); })) << "Gaussian sigma above one half";
+        expect(throws<std::invalid_argument>([] { std::ignore = create<double>(Kaiser, 64UZ, -1.); })) << "Kaiser beta below zero";
+        expect(throws<std::invalid_argument>([] { std::ignore = create<double>(Exponential, 64UZ, -1.); })) << "Exponential decay below zero";
+
+        for (const auto& [window, windowName] : magic_enum::enum_entries<gr::algorithm::window::Type>()) {
+            expect(nothrow([window] { std::ignore = create<double>(window, 64UZ); })) << std::format("{} accepts a NaN parameter", windowName);
+        }
+        expect(std::ranges::equal(create<double>(Kaiser, 64UZ), create<double>(Kaiser, 64UZ, 1.6))) << "Kaiser defaults to beta = 1.6";
+        expect(std::ranges::equal(create<double>(Tukey, 64UZ), create<double>(Tukey, 64UZ, 0.5))) << "Tukey defaults to alpha = 0.5";
+        expect(std::ranges::equal(create<double>(Gaussian, 64UZ), create<double>(Gaussian, 64UZ, 0.4))) << "Gaussian defaults to sigma = 0.4";
+        expect(std::ranges::equal(create<double>(Exponential, 64UZ), create<double>(Exponential, 64UZ, 60.))) << "Exponential defaults to 60 dB of decay";
+        // a shallower decay is a wider window: 20 dB leaves the edges at a tenth, 60 dB at a thousandth
+        expect(approx(create<double>(Exponential, 65UZ, 20.).front(), 0.1, 1e-3)) << "Exponential(20 dB) edge value";
+        expect(approx(create<double>(Exponential, 65UZ, 60.).front(), 0.001, 1e-5)) << "Exponential(60 dB) edge value";
+    };
+
+    // sigma is a fraction of the half-length rather than a count of samples, so the shape -- and with it
+    // the whole table row -- holds across N.
+    "Gaussian sigma is scale invariant"_test = [] {
+        using enum gr::algorithm::window::Type;
+        const double shortWindow = windowMetrics::peakSidelobeDb(create<double>(Gaussian, 255UZ, 0.4), 1UZ << 18);
+        const double longWindow  = windowMetrics::peakSidelobeDb(create<double>(Gaussian, 1023UZ, 0.4), 1UZ << 18);
+        expect(approx(shortWindow, longWindow, 0.5)) << std::format("Gaussian(0.4) peak sidelobe level: {:.2f} dB at N=255 vs {:.2f} dB at N=1023", shortWindow, longWindow);
+    };
+
+    "Rectangular ENBW is exactly one"_test = [] {
+        for (const std::size_t n : {2UZ, 3UZ, 8UZ, 9UZ, 64UZ, 65UZ, 255UZ, 1023UZ}) {
+            expect(eq(windowMetrics::enbw(create<double>(gr::algorithm::window::Type::Rectangular, n)), 1.)) << std::format("Rectangular n={} ENBW", n);
+        }
+    };
+
+    // The measured table. Every number is recomputed from the coefficients by the definitions in
+    // windowMetrics, which is what catches a coefficient typo: a table carrying only ENBW and the coherent
+    // gain would not, since a squared sine has the same mean and mean square as Hann over a whole period.
+    // The response is read on a 2^18-point transform, which resolves each tabled level to 0.3 dB.
+    "measured window table at N = 1023"_test = [] {
+        struct Row {
+            gr::algorithm::window::Type window;
+            double                      param;
+            double                      peakSidelobeDb;
+            double                      enbw;
+            double                      coherentGain;
+            double                      attenuationDb;
+        };
+        using enum gr::algorithm::window::Type;
+        constexpr double        own    = std::numeric_limits<double>::quiet_NaN(); // the window's own default
+        static const std::array kTable = std::to_array<Row>({
+            //                                PSL dB     ENBW      CG      A dB
+            {Rectangular, own, /*        */ -13.26, 1.0000, 1.0000, 20.96},
+            {Bartlett, own, /*           */ -26.52, 1.3346, 0.4995, 26.26},
+            {Welch, own, /*              */ -21.29, 1.2012, 0.6660, 31.38},
+            {Hann, own, /*               */ -31.47, 1.5015, 0.4995, 43.94},
+            {Hamming, own, /*            */ -43.19, 1.3686, 0.5379, 53.40},
+            {Parzen, own, /*             */ -53.05, 1.9175, 0.3750, 56.64},
+            {Blackman, own, /*           */ -58.11, 1.7284, 0.4196, 75.29},
+            {FlatTop, own, /*            */ -76.62, 3.7739, 0.2155, 95.70},
+            {BlackmanHarris, own, /*     */ -92.01, 2.0063, 0.3584, 109.29},
+            {Nuttall, own, /*            */ -93.32, 2.0232, 0.3554, 111.96},
+            {BlackmanNuttall, own, /*    */ -98.16, 1.9780, 0.3632, 114.90},
+            // Exponential's transform leaves its main lobe without a null bound, so neither figure is an
+            // attenuation in the sense the rows above use them: it stays above -49.48 dB out to 38.4 bins, and
+            // the windowed sinc's transition band is 330 taps wide. Pinned as a regression anchor.
+            {Exponential, own, /*        */ -49.48, 3.4626, 0.1445, 47.27},
+
+            {Kaiser, 0.0, /*             */ -13.26, 1.0000, 1.0000, 20.96},
+            {Kaiser, 1.6, /*             */ -16.70, 1.0238, 0.8482, 26.53},
+            {Kaiser, 3.0, /*             */ -23.76, 1.1372, 0.6837, 36.88},
+            {Kaiser, 4.0, /*             */ -29.98, 1.2476, 0.6032, 45.36},
+            {Kaiser, 5.0, /*             */ -36.73, 1.3601, 0.5443, 54.13},
+            {Kaiser, 6.0, /*             */ -43.81, 1.4682, 0.4996, 63.02},
+            {Kaiser, 7.0, /*             */ -51.12, 1.5705, 0.4642, 72.00},
+            {Kaiser, 8.0, /*             */ -58.63, 1.6673, 0.4353, 81.08},
+            {Kaiser, 9.0, /*             */ -66.30, 1.7593, 0.4112, 90.26},
+            {Kaiser, 10.0, /*            */ -74.10, 1.8469, 0.3908, 99.44},
+            {Kaiser, 12.0, /*            */ -89.92, 2.0111, 0.3575, 117.35},
+            {Kaiser, 14.0, /*            */ -105.90, 2.1632, 0.3315, 135.06},
+
+            // Tukey buys almost nothing in stopband attenuation until alpha is close to one -- 0.0 to 0.75 sits
+            // between 21 and 25 dB, because only at exactly 1 does the taper reach the center
+            {Tukey, 0.0, /*              */ -13.26, 1.0000, 1.0000, 20.96},
+            {Tukey, 0.1, /*              */ -13.31, 1.0398, 0.9491, 20.99},
+            {Tukey, 0.25, /*             */ -13.60, 1.1031, 0.8741, 21.15},
+            {Tukey, 0.5, /*              */ -15.12, 1.2234, 0.7493, 22.03},
+            {Tukey, 0.75, /*             */ -19.39, 1.3613, 0.6244, 24.89},
+            {Tukey, 0.9, /*              */ -24.97, 1.4477, 0.5495, 30.05},
+            {Tukey, 1.0, /*              */ -31.47, 1.5015, 0.4995, 43.94},
+
+            {Gaussian, 0.2, /*           */ -128.86, 2.8237, 0.2504, 151.23},
+            {Gaussian, 0.25, /*          */ -87.74, 2.2592, 0.3130, 106.77},
+            {Gaussian, 0.3, /*           */ -64.23, 1.8857, 0.3753, 84.59},
+            {Gaussian, 0.35, /*          */ -52.12, 1.6272, 0.4364, 69.53},
+            {Gaussian, 0.4, /*           */ -43.30, 1.4468, 0.4947, 59.23},
+            {Gaussian, 0.5, /*           */ -31.92, 1.2334, 0.5977, 45.37},
+        });
+
+        constexpr std::size_t nFft        = 1UZ << 18;
+        constexpr double      dbTolerance = 0.3;
+
+        for (const auto& row : kTable) {
+            const auto        window = create<double>(row.window, 1023UZ, row.param);
+            const std::string label  = std::isnan(row.param) ? std::string(magic_enum::enum_name(row.window)) : std::format("{}({})", magic_enum::enum_name(row.window), row.param);
+            expect(approx(windowMetrics::enbw(window), row.enbw, 1e-3)) << std::format("{} ENBW", label);
+            expect(approx(windowMetrics::coherentGain(window), row.coherentGain, 1e-4)) << std::format("{} coherent gain", label);
+            expect(approx(windowMetrics::peakSidelobeDb(window, nFft), row.peakSidelobeDb, dbTolerance)) << std::format("{} peak sidelobe level", label);
+            expect(approx(windowMetrics::stopbandAttenuationDb(window, nFft), row.attenuationDb, dbTolerance)) << std::format("{} windowed-sinc stopband attenuation", label);
+        }
+    };
 
     "window corner cases"_test = []<typename T>() {
         static_assert(not magic_enum::enum_cast<gr::algorithm::window::Type>("UnknownWindow", magic_enum::case_insensitive).has_value());
