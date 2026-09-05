@@ -1,10 +1,16 @@
 #include <boost/ut.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <format>
+#include <random>
+#include <span>
+#include <tuple>
 #include <vector>
 
+#include <gnuradio-4.0/algorithm/fec/Interleaver.hpp>
 #include <gnuradio-4.0/algorithm/fec/ReedSolomon.hpp>
 
 /*
@@ -39,8 +45,42 @@
  */
 namespace {
 
+using gr::fec::CcsdsDualBasis;
+using gr::fec::ccsdsInterleaveDepthAllowed;
+using gr::fec::deinterleaveCodewords;
+using gr::fec::interleaveCodewords;
+using gr::fec::Interleaver;
 using gr::fec::ReedSolomon6;
+using gr::fec::ReedSolomonCcsds255_223;
+using gr::fec::ReedSolomonCcsds255_239;
 using gr::fec::RsResult;
+
+/// The GF(256) field CCSDS 131.0-B-5 4.3.3 names, on `F(x) = x^8 + x^7 + x^2 + x + 1`.
+constexpr auto& kGf256 = gr::fec::detail::kGf<8UZ, 0x187U>;
+
+/// A codeword evaluated at `alpha^exp`, its first symbol the highest power, written here rather than
+/// taken from the decoder so a syndrome check is a statement about the encoder and not about itself.
+template<typename Code>
+[[nodiscard]] std::uint8_t evaluateCcsds(const typename Code::Block& block, unsigned exp) {
+    std::uint8_t value = 0U;
+    for (const std::uint8_t symbol : block) {
+        const std::uint8_t scaled = value == 0U ? std::uint8_t{0} : kGf256.exp[(static_cast<unsigned>(kGf256.log[value]) + exp) % 255U];
+        value                     = static_cast<std::uint8_t>(symbol ^ scaled);
+    }
+    return value;
+}
+
+/// @p count distinct symbol positions of a 255-symbol block, at or above @p from.
+[[nodiscard]] std::vector<std::size_t> distinctPositions(std::mt19937_64& engine, std::size_t count, std::size_t from) {
+    std::vector<std::size_t> chosen;
+    while (chosen.size() < count) {
+        const std::size_t position = from + (engine() % (255UZ - from));
+        if (std::ranges::find(chosen, position) == chosen.end()) {
+            chosen.push_back(position);
+        }
+    }
+    return chosen;
+}
 
 /// The field the three P25 codes share: GF(64) on x^6 + x + 1.
 constexpr auto& kGf64 = gr::fec::detail::kGf<6UZ, 0x43U>;
@@ -307,6 +347,259 @@ const boost::ut::suite<"reed-solomon"> reedSolomonTests = [] {
         refuses(ReedSolomon6<12UZ>{}, 39UZ, {0x3FU, 0x21U, 0x3FU, 0x03U, 0x35U, 0x03U, 0x2CU, 0x19U, 0x33U, 0x3CU, 0x00U, 0x3FU, 0x3AU, 0x24U, 0x25U, 0x0DU, 0x20U, 0x09U, 0x0FU, 0x0DU, 0x34U, 0x1AU, 0x2CU, 0x3EU}, "RS(24,12,13) refuses a corrected block that is not a codeword");
         refuses(ReedSolomon6<8UZ>{}, 39UZ, {0x20U, 0x3AU, 0x2DU, 0x20U, 0x20U, 0x0CU, 0x2AU, 0x20U, 0x2DU, 0x0AU, 0x16U, 0x0BU, 0x07U, 0x24U, 0x0BU, 0x2BU, 0x19U, 0x10U, 0x0AU, 0x2DU, 0x22U, 0x0EU, 0x01U, 0x0DU}, "RS(24,16,9) refuses a corrected block that is not a codeword");
         refuses(ReedSolomon6<16UZ>{}, 27UZ, {0x22U, 0x26U, 0x13U, 0x39U, 0x0AU, 0x1CU, 0x20U, 0x37U, 0x0CU, 0x3DU, 0x0DU, 0x2CU, 0x31U, 0x11U, 0x06U, 0x15U, 0x07U, 0x09U, 0x23U, 0x1AU, 0x1EU, 0x2DU, 0x14U, 0x0DU, 0x09U, 0x03U, 0x38U, 0x30U, 0x3AU, 0x26U, 0x28U, 0x26U, 0x24U, 0x09U, 0x3FU, 0x3CU}, "RS(36,20,17) refuses a corrected block that is not a codeword");
+    };
+
+    // The CCSDS generator, from 4.3.4's product limits rather than from any table.
+    "the CCSDS generator's roots are the product limits, and it is self-reciprocal"_test = [] {
+        using Code = ReedSolomonCcsds255_223;
+        expect(eq(Code::kBlock, 255UZ));
+        expect(eq(Code::kRoots, 32UZ));
+        expect(eq(Code::kCorrectable, 16U)) << "255 - 223 = 32 = 2E, so t = E = 16";
+
+        // 4.3.4's product runs over j = 128-E .. 127+E of (x - alpha^(11j)), so the roots written as
+        // powers of alpha are 11j mod 255. The first four and the last are the values that derivation
+        // gives, and all 32 are distinct because gcd(11, 255) = 1 makes alpha^11 primitive.
+        expect(eq(Code::rootExponent(0UZ), 212U)) << "11 * 112 mod 255";
+        expect(eq(Code::rootExponent(1UZ), 223U));
+        expect(eq(Code::rootExponent(2UZ), 234U));
+        expect(eq(Code::rootExponent(3UZ), 245U));
+        expect(eq(Code::rootExponent(4UZ), 1U)) << "11 * 116 = 1276, which is 1 past five turns of 255";
+        expect(eq(Code::rootExponent(31UZ), 43U)) << "11 * 143 mod 255";
+
+        std::vector<unsigned> exponents;
+        for (std::size_t i = 0UZ; i < Code::kRoots; ++i) {
+            exponents.push_back(Code::rootExponent(i));
+        }
+        std::ranges::sort(exponents);
+        expect(eq(std::ranges::unique(exponents).size(), 0UZ)) << "32 distinct roots, which is what the coprimality buys";
+
+        // Annex F states the generator is self-reciprocal, which is a property of the code and needs no
+        // table at all, and annex G's coefficient table is not reproduced here, so the derivation is
+        // checked against the property it must satisfy on its own.
+        constexpr auto g          = Code::generator();
+        std::size_t    asymmetric = 0UZ;
+        for (std::size_t i = 0UZ; i <= Code::kRoots; ++i) {
+            asymmetric += g[i] == g[Code::kRoots - i] ? 0UZ : 1UZ;
+        }
+        expect(eq(asymmetric, 0UZ)) << "G_i equals G_(2E-i) for every i";
+        expect(eq(g[0], std::uint8_t{0})) << "and both end coefficients are alpha^0, which is one";
+
+        // The generator vanishes at its own roots and nowhere adjacent to them, which is what fixes the
+        // count and the starting power together. A generator built for a different first root encodes
+        // and decodes self-consistently and agrees with nothing else in the world.
+        typename Code::Block asPolynomial{};
+        for (std::size_t i = 0UZ; i <= Code::kRoots; ++i) {
+            asPolynomial[Code::kBlock - 1UZ - i] = g[i] == Code::kLogZero ? std::uint8_t{0} : kGf256.exp[g[i]];
+        }
+        std::size_t nonZeroAtRoot = 0UZ;
+        for (std::size_t i = 0UZ; i < Code::kRoots; ++i) {
+            nonZeroAtRoot += evaluateCcsds<Code>(asPolynomial, Code::rootExponent(i)) == 0U ? 0UZ : 1UZ;
+        }
+        expect(eq(nonZeroAtRoot, 0UZ)) << "every one of the 32 roots is a root of the generator";
+        expect(that % (evaluateCcsds<Code>(asPolynomial, Code::modExp(11U * 111U)) != 0U)) << "and the power one below the first is not";
+        expect(that % (evaluateCcsds<Code>(asPolynomial, Code::modExp(11U * 144U)) != 0U)) << "nor the one above the last";
+
+        expect(eq(ReedSolomonCcsds255_239::kRoots, 16UZ));
+        expect(eq(ReedSolomonCcsds255_239::rootExponent(0UZ), Code::modExp(11U * 120U))) << "E = 8 starts at 128 - 8";
+    };
+
+    // The dual basis, from 4.4.2's definition alone.
+    "the dual basis is the definition, and it is a bijection"_test = [] {
+        expect(that % CcsdsDualBasis::isBijective()) << "the eight powers of alpha^117 are linearly independent, which is all the basis needs";
+
+        // (b) Tr(l_i * b^j) is one when i equals j and zero otherwise, over all 64 pairs. This is the
+        //     definition 4.4.2 states, asserted directly rather than through the tables it produced.
+        std::size_t offside = 0UZ;
+        for (std::size_t i = 0UZ; i < 8UZ; ++i) {
+            for (std::size_t j = 0UZ; j < 8UZ; ++j) {
+                const std::uint8_t power   = kGf256.exp[(117U * static_cast<unsigned>(j)) % 255U];
+                const std::uint8_t product = gr::fec::detail::gfMultiply<8UZ, 0x187U>(CcsdsDualBasis::basisElement(i), power);
+                offside += CcsdsDualBasis::trace(product) == (i == j ? 1U : 0U) ? 0UZ : 1UZ;
+            }
+        }
+        expect(eq(offside, 0UZ)) << "Tr(l_i b^j) is the Kronecker delta over all 64 pairs";
+
+        // (c) the round trip over all 256 elements, both ways, and GF(2)-linearity over all 65536 pairs
+        std::size_t roundTrips = 0UZ;
+        for (unsigned value = 0U; value < 256U; ++value) {
+            const std::uint8_t element = static_cast<std::uint8_t>(value);
+            roundTrips += CcsdsDualBasis::fromDual(CcsdsDualBasis::toDual(element)) == element && CcsdsDualBasis::toDual(CcsdsDualBasis::fromDual(element)) == element ? 1UZ : 0UZ;
+        }
+        expect(eq(roundTrips, 256UZ));
+
+        std::size_t nonLinear = 0UZ;
+        for (unsigned a = 0U; a < 256U; ++a) {
+            for (unsigned b = 0U; b < 256U; ++b) {
+                const std::uint8_t left  = CcsdsDualBasis::toDual(static_cast<std::uint8_t>(a ^ b));
+                const std::uint8_t right = static_cast<std::uint8_t>(CcsdsDualBasis::toDual(static_cast<std::uint8_t>(a)) ^ CcsdsDualBasis::toDual(static_cast<std::uint8_t>(b)));
+                nonLinear += left == right ? 0UZ : 1UZ;
+            }
+        }
+        expect(eq(nonLinear, 0UZ)) << "the map is GF(2)-linear over all 65536 pairs, which is what makes a 256-entry table right";
+
+        // the anchors the derivation produces, which need no published matrix: 4.3.9.3's two matrices are
+        // not reproduced here, and these four values are the derivation's own outputs.
+        expect(eq(CcsdsDualBasis::toDual(0x00U), std::uint8_t{0x00U})) << "linearity fixes zero";
+        expect(eq(CcsdsDualBasis::toDual(0x01U), std::uint8_t{0x7BU}));
+        expect(eq(CcsdsDualBasis::toDual(0x02U), std::uint8_t{0xAFU}));
+        expect(eq(CcsdsDualBasis::toDual(0xFFU), std::uint8_t{0xBFU}));
+
+        // the map is not a field isomorphism, which is why the recoding never moves inside the decoder
+        expect(that % (CcsdsDualBasis::toDual(gr::fec::detail::gfMultiply<8UZ, 0x187U>(0x03U, 0x05U)) != gr::fec::detail::gfMultiply<8UZ, 0x187U>(CcsdsDualBasis::toDual(0x03U), CcsdsDualBasis::toDual(0x05U)))) << "linear, not multiplicative";
+    };
+
+    // 3 and 5. A codeword has zero syndromes, and shortening is padding then discarding.
+    "a CCSDS codeword evaluates to zero at every root, at every pad"_test = [] {
+        using Code = ReedSolomonCcsds255_223;
+        std::mt19937_64 engine{0xA5A5A5A5ULL};
+
+        std::size_t nonZero = 0UZ;
+        for (const std::size_t pad : {0UZ, 1UZ, 17UZ, 100UZ, 222UZ}) {
+            typename Code::Block block{};
+            for (std::size_t i = pad; i < 223UZ; ++i) {
+                block[i] = static_cast<std::uint8_t>(engine());
+            }
+            Code::encode(block, pad);
+            for (std::size_t i = 0UZ; i < Code::kRoots; ++i) {
+                nonZero += evaluateCcsds<Code>(block, Code::rootExponent(i)) == 0U ? 0UZ : 1UZ;
+            }
+        }
+        expect(eq(nonZero, 0UZ)) << "the encoder's own output vanishes at all 32 roots, so the generator and the evaluation agree";
+
+        // Encoding k - p symbols at pad = p gives the last n - p symbols of the same block preceded
+        //    by p zeros and encoded at pad = 0, which is the identity 4.3.7.3 states.
+        std::size_t mismatches = 0UZ;
+        for (const std::size_t pad : {0UZ, 1UZ, 5UZ, 100UZ, 200UZ}) {
+            typename Code::Block shortened{};
+            typename Code::Block filled{};
+            for (std::size_t i = pad; i < 223UZ; ++i) {
+                const std::uint8_t symbol = static_cast<std::uint8_t>(engine());
+                shortened[i]              = symbol;
+                filled[i]                 = symbol;
+            }
+            Code::encode(shortened, pad);
+            Code::encode(filled, 0UZ);
+            for (std::size_t i = pad; i < Code::kBlock; ++i) {
+                mismatches += shortened[i] == filled[i] ? 0UZ : 1UZ;
+            }
+        }
+        expect(eq(mismatches, 0UZ)) << "shortening is virtual fill, which is exactly padding then discarding";
+    };
+
+    // Correction to the radius and refusal beyond it, counted.
+    "the CCSDS code corrects sixteen symbols and refuses seventeen"_test = [] {
+        using Code = ReedSolomonCcsds255_223;
+        std::mt19937_64 engine{0x0DDBA11ULL};
+
+        const auto trial = [&engine](unsigned errors) {
+            typename Code::Block information{};
+            for (std::size_t i = 0UZ; i < 223UZ; ++i) {
+                information[i] = static_cast<std::uint8_t>(engine());
+            }
+            typename Code::Block sent = information;
+            Code::encode(sent);
+
+            typename Code::Block received = sent;
+            for (const std::size_t position : distinctPositions(engine, errors, 0UZ)) {
+                std::uint8_t noise = 0U;
+                while (noise == 0U) {
+                    noise = static_cast<std::uint8_t>(engine());
+                }
+                received[position] = static_cast<std::uint8_t>(received[position] ^ noise);
+            }
+
+            const RsResult result = Code::decode(received);
+            const bool     exact  = std::equal(received.begin(), received.begin() + 223, information.begin());
+            return std::tuple{result.valid, result.errors, exact};
+        };
+
+        for (unsigned errors = 0U; errors <= 16U; ++errors) {
+            std::size_t recovered = 0UZ;
+            for (std::size_t i = 0UZ; i < 20UZ; ++i) {
+                const auto [valid, corrected, exact] = trial(errors);
+                recovered += valid && corrected == errors && exact ? 1UZ : 0UZ;
+            }
+            expect(eq(recovered, 20UZ)) << std::format("{} injected symbol errors, all recovered with the count reported exactly", errors);
+        }
+
+        // the specification's own reference shape, at the radius and one past it
+        std::size_t correctedAtLimit = 0UZ;
+        std::size_t refusedBeyond    = 0UZ;
+        std::size_t acceptedWrong    = 0UZ;
+        for (std::size_t i = 0UZ; i < 200UZ; ++i) {
+            const auto [valid, corrected, exact] = trial(16U);
+            correctedAtLimit += valid && corrected == 16U && exact ? 1UZ : 0UZ;
+        }
+        for (std::size_t i = 0UZ; i < 200UZ; ++i) {
+            const auto [valid, corrected, exact] = trial(17U);
+            refusedBeyond += valid ? 0UZ : 1UZ;
+            acceptedWrong += valid && !exact ? 1UZ : 0UZ;
+        }
+        expect(eq(correctedAtLimit, 200UZ)) << "200 of 200 corrected at sixteen errors";
+        expect(eq(refusedBeyond, 200UZ)) << "200 of 200 refused at seventeen";
+        expect(eq(acceptedWrong, 0UZ)) << "and none accepted but wrong";
+    };
+
+    // The interleaving is one index map, and it is the map the Interleaver kernel already has.
+    "interleaving at depth one is the identity, and at depth I is the block permutation"_test = [] {
+        std::mt19937_64 engine{0x5EEDULL};
+
+        for (const std::size_t depth : {1UZ, 2UZ, 3UZ, 4UZ, 5UZ, 8UZ}) {
+            expect(that % ccsdsInterleaveDepthAllowed(depth)) << std::format("4.3.5.1 allows depth {}", depth);
+            for (const std::size_t pad : {0UZ, 7UZ, 200UZ}) {
+                const std::size_t         rows  = 255UZ - pad;
+                const std::size_t         count = rows * depth;
+                std::vector<std::uint8_t> codewords(count);
+                for (std::uint8_t& symbol : codewords) {
+                    symbol = static_cast<std::uint8_t>(engine());
+                }
+
+                std::vector<std::uint8_t> codeblock(count, 0U);
+                interleaveCodewords(codewords, codeblock, rows, depth);
+                if (depth == 1UZ) {
+                    expect(that % std::ranges::equal(codeblock, codewords)) << "depth one is the absence of interleaving, exactly";
+                }
+
+                std::vector<std::uint8_t> back(count, 0U);
+                deinterleaveCodewords(codeblock, back, rows, depth);
+                expect(that % std::ranges::equal(back, codewords)) << std::format("depth {}, pad {}: the two maps invert each other", depth, pad);
+
+                // Interleaver's `block` kind at rows = 255 - pad and cols = depth takes a transmitted
+                // codeblock to contiguous codewords, which is the deinterleave; its inverse is the
+                // interleave. Proved against that kernel rather than believed.
+                Interleaver<std::uint8_t> reference = Interleaver<std::uint8_t>::block(rows, depth);
+                std::vector<std::uint8_t> gathered(count, 0U);
+                expect(eq(reference.interleave(codeblock, gathered), count));
+                expect(that % std::ranges::equal(gathered, codewords)) << std::format("depth {}, pad {}: the deinterleave is the block permutation", depth, pad);
+
+                std::vector<std::uint8_t> scattered(count, 0U);
+                expect(eq(reference.deinterleave(codewords, scattered), count));
+                expect(that % std::ranges::equal(scattered, codeblock)) << std::format("depth {}, pad {}: and the interleave is its inverse", depth, pad);
+            }
+        }
+
+        expect(that % !ccsdsInterleaveDepthAllowed(6UZ)) << "4.3.5.1 omits six";
+        expect(that % !ccsdsInterleaveDepthAllowed(7UZ)) << "and seven";
+        expect(that % !ccsdsInterleaveDepthAllowed(0UZ));
+        expect(that % !ccsdsInterleaveDepthAllowed(9UZ));
+
+        // a burst of E * I consecutive codeblock symbols is one error per codeword per E, which is the
+        // reason the standard has interleaving at all, stated as the count it is
+        constexpr std::size_t     kDepth = 5UZ;
+        std::vector<std::uint8_t> codewords(255UZ * kDepth, 0U);
+        std::vector<std::uint8_t> codeblock(codewords.size(), 0U);
+        interleaveCodewords(codewords, codeblock, 255UZ, kDepth);
+        for (std::size_t i = 0UZ; i < 16UZ * kDepth; ++i) {
+            codeblock[i] = 0xFFU;
+        }
+        deinterleaveCodewords(codeblock, codewords, 255UZ, kDepth);
+        for (std::size_t word = 0UZ; word < kDepth; ++word) {
+            std::size_t hit = 0UZ;
+            for (std::size_t i = 0UZ; i < 255UZ; ++i) {
+                hit += codewords[word * 255UZ + i] != 0U ? 1UZ : 0UZ;
+            }
+            expect(eq(hit, 16UZ)) << std::format("codeword {}: a burst of 80 consecutive symbols is 16 per codeword, exactly the radius", word);
+        }
     };
 };
 

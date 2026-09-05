@@ -8,7 +8,9 @@
 #include <initializer_list>
 #include <numbers>
 #include <print>
+#include <ranges>
 #include <span>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -30,10 +32,13 @@
  */
 namespace {
 
+using gr::fec::configureConvention;
+using gr::fec::conventionByName;
 using gr::fec::ConvolutionalCode;
 using gr::fec::convolutionalEncode;
 using gr::fec::convolutionalEncodedBits;
 using gr::fec::convolutionalInfoBits;
+using gr::fec::kConvConventions;
 using gr::fec::ViterbiDecoder;
 using gr::fec::ViterbiResult;
 
@@ -426,6 +431,140 @@ const boost::ut::suite<"convolutional"> convolutionalTests = [] {
         // The measured numbers are printed rather than left for a failure to reveal.
         std::println(stderr, "convolutional: hard decision at {} dB, {} errors in {} bits, BER {:.3e} against curve {:.1e}", kHardEbN0Db, hardTrial.hard, hardTrial.bits, hardBer, kHardCurveBer);
         std::println(stderr, "convolutional: soft decision at {} dB, {} errors in {} bits, BER {:.3e} against curve {:.1e}", kSoftEbN0Db, softTrial.soft, softTrial.bits, softBer, kSoftCurveBer);
+    };
+
+    // The impulse response in time order, against the standard's own connection vectors.
+    // This is the assertion that catches the spelling reversal, and it consults no integer: an isolated
+    // one drives step i to emit bit i of each polynomial, so what comes out in time order is the vector
+    // the standard prints left to right.
+    "the CCSDS impulse response is the standard's vectors, read left to right"_test = [] {
+        constexpr std::array<std::uint8_t, 7> kG1{1U, 1U, 1U, 1U, 0U, 0U, 1U};         // 1111001, octal 171
+        constexpr std::array<std::uint8_t, 7> kG2{1U, 0U, 1U, 1U, 0U, 1U, 1U};         // 1011011, octal 133
+        constexpr std::array<std::uint8_t, 7> kG2Inverted{0U, 1U, 0U, 0U, 1U, 0U, 0U}; // 3.3.1 (5)
+
+        const auto impulse = [](std::string_view name, std::size_t output) {
+            ConvolutionalCode code;
+            expect(that % configureConvention(code, name)) << name;
+            std::vector<std::uint8_t> info(24UZ, std::uint8_t{0});
+            info[0] = 1U;
+            std::vector<std::uint8_t> coded(convolutionalEncodedBits(code, info.size()), std::uint8_t{0});
+            expect(that % (convolutionalEncode(code, info, coded) == coded.size()));
+
+            std::array<std::uint8_t, 7> response{};
+            for (std::size_t t = 0UZ; t < response.size(); ++t) {
+                response[t] = coded[t * 2UZ + output];
+            }
+            return response;
+        };
+
+        expect(that % std::ranges::equal(impulse("ccsds", 0UZ), kG1)) << "G1 = 1111001, the first symbol of the pair";
+        expect(that % std::ranges::equal(impulse("ccsds", 1UZ), kG2Inverted)) << "G2 = 1011011, second and complemented";
+        expect(that % std::ranges::equal(impulse("ccsds_uninverted", 1UZ), kG2)) << "the same code with the inversion removed downstream";
+        expect(that % std::ranges::equal(impulse("nasa_dsn", 0UZ), kG2Inverted)) << "the two outputs exchanged";
+        expect(that % std::ranges::equal(impulse("nasa_dsn", 1UZ), kG1));
+
+        // and the spelling those responses came from: 0117 and 0155, not 0171 and 0133
+        const auto* ccsds = conventionByName("ccsds");
+        expect(that % (ccsds != nullptr));
+        expect(eq(ccsds->constraintLength, 7UZ));
+        expect(eq(ccsds->polynomials[0], 0117U)) << "the standard's 171 with the current input bit at bit 0";
+        expect(eq(ccsds->polynomials[1], 0155U)) << "and its 133";
+        expect(eq(ccsds->outputInversion, 0b10U));
+        expect(that % (conventionByName("ccsds171") == nullptr)) << "an unknown name resolves to nothing rather than to a default";
+
+        // the reversal, shown to be a different code in time order rather than merely warned about
+        ConvolutionalCode reversed;
+        expect(that % reversed.configure(7UZ, std::array<std::uint32_t, 2>{0171U, 0133U}));
+        std::vector<std::uint8_t> info(24UZ, std::uint8_t{0});
+        info[0] = 1U;
+        std::vector<std::uint8_t> coded(convolutionalEncodedBits(reversed, info.size()), std::uint8_t{0});
+        expect(that % (convolutionalEncode(reversed, info, coded) == coded.size()));
+        std::array<std::uint8_t, 7> wrong{};
+        for (std::size_t t = 0UZ; t < wrong.size(); ++t) {
+            wrong[t] = coded[t * 2UZ];
+        }
+        expect(that % !std::ranges::equal(wrong, kG1)) << "0171 builds the time-reverse, which passes every performance test and does not decode";
+        expect(that % std::ranges::equal(wrong, std::array<std::uint8_t, 7>{1U, 0U, 0U, 1U, 1U, 1U, 1U})) << "and what it emits is G1 reversed";
+    };
+
+    // The inversion is a relabelling of the output alphabet and nothing else.
+    "an output inversion is a relabelling, at both ends"_test = [] {
+        const ConvolutionalCode plain = codeOf(7UZ, {0117U, 0155U});
+        const auto              info  = randomBits(400UZ);
+
+        std::vector<std::uint8_t> uninverted(convolutionalEncodedBits(plain, info.size()), std::uint8_t{0});
+        expect(that % (convolutionalEncode(plain, info, uninverted) == uninverted.size()));
+
+        for (const std::uint32_t mask : {0b01U, 0b10U, 0b11U}) {
+            ConvolutionalCode inverted;
+            expect(that % inverted.configure(7UZ, std::array<std::uint32_t, 2>{0117U, 0155U}, mask));
+
+            std::vector<std::uint8_t> coded(uninverted.size(), std::uint8_t{0});
+            expect(that % (convolutionalEncode(inverted, info, coded) == coded.size()));
+
+            std::size_t offside = 0UZ;
+            for (std::size_t i = 0UZ; i < coded.size(); ++i) {
+                const std::uint32_t output   = static_cast<std::uint32_t>(i % 2UZ);
+                const std::uint8_t  expected = static_cast<std::uint8_t>(uninverted[i] ^ ((mask >> output) & 1U));
+                offside += coded[i] == expected ? 0UZ : 1UZ;
+            }
+            expect(eq(offside, 0UZ)) << std::format("mask {:#b}: exactly the named outputs are complemented", mask);
+
+            ViterbiDecoder            decoder{inverted};
+            std::vector<std::uint8_t> back(info.size(), std::uint8_t{0});
+            const ViterbiResult       result = decoder.decodeHard(coded, back);
+            expect(that % std::ranges::equal(back, info)) << std::format("mask {:#b}: the same mask at the far end recovers the information exactly", mask);
+            expect(eq(result.distance, 0UZ)) << "and the trellis is unchanged in shape, so a clean word is at distance zero";
+        }
+
+        // an inversion naming an output the code does not have describes a rate this is not
+        ConvolutionalCode refused;
+        expect(that % !refused.configure(7UZ, std::array<std::uint32_t, 2>{0117U, 0155U}, 0b100U));
+        expect(that % !refused.configured()) << "and a refused code is left unconfigured rather than half built";
+    };
+
+    // The four conventions are four different chains, and each is its own inverse.
+    "each named convention inverts itself and nothing else"_test = [] {
+        const auto info = randomBits(400UZ);
+        expect(eq(kConvConventions.size(), 4UZ));
+
+        std::vector<std::vector<std::uint8_t>> encoded;
+        for (const auto& convention : kConvConventions) {
+            ConvolutionalCode code;
+            expect(that % configureConvention(code, convention.name)) << convention.name;
+
+            std::vector<std::uint8_t> coded(convolutionalEncodedBits(code, info.size()), std::uint8_t{0});
+            expect(that % (convolutionalEncode(code, info, coded) == coded.size()));
+
+            ViterbiDecoder            decoder{code};
+            std::vector<std::uint8_t> back(info.size(), std::uint8_t{0});
+            const ViterbiResult       result = decoder.decodeHard(coded, back);
+            expect(that % std::ranges::equal(back, info)) << std::format("{} round-trips", convention.name);
+            expect(eq(result.distance, 0UZ));
+            encoded.push_back(std::move(coded));
+        }
+
+        for (std::size_t i = 0UZ; i < encoded.size(); ++i) {
+            for (std::size_t j = 0UZ; j < encoded.size(); ++j) {
+                if (i == j) {
+                    continue;
+                }
+                expect(that % !std::ranges::equal(encoded[i], encoded[j])) << std::format("{} and {} are different chains", kConvConventions[i].name, kConvConventions[j].name);
+
+                ConvolutionalCode wrong;
+                expect(that % configureConvention(wrong, kConvConventions[j].name));
+                ViterbiDecoder            decoder{wrong};
+                std::vector<std::uint8_t> back(info.size(), std::uint8_t{0});
+                const ViterbiResult       result = decoder.decodeHard(encoded[i], back);
+
+                std::size_t errors = 0UZ;
+                for (std::size_t bit = 0UZ; bit < info.size(); ++bit) {
+                    errors += back[bit] == info[bit] ? 0UZ : 1UZ;
+                }
+                expect(gt(errors, 0UZ)) << std::format("{} decoded as {} does not recover the data", kConvConventions[i].name, kConvConventions[j].name);
+                expect(gt(result.distance, 0UZ)) << "and the decoder says so through the distance it reports";
+            }
+        }
     };
 };
 
