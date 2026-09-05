@@ -42,10 +42,15 @@ enum class Type : int { None, Rectangular, Hamming, Hann, HannExp [[deprecated("
 using enum Type;
 inline static constexpr gr::meta::fixed_string TypeNames = "[None, Rectangular, Hamming, Hann, HannExp, Blackman, Nuttall, BlackmanHarris, BlackmanNuttall, FlatTop, Exponential, Kaiser, Bartlett, Welch, Parzen, Tukey, Gaussian]";
 
-namespace detail {
+/**
+ * @brief Modified Bessel function of the first kind, order zero, by its series.
+ *
+ * The Kaiser window is defined in terms of it, so a caller shaping its own Kaiser taps needs the same
+ * function; it is part of this header's interface rather than an implementation detail.
+ */
 template<typename T>
 requires std::is_floating_point_v<T>
-constexpr T bessel_i0(const T x) noexcept {
+[[nodiscard]] constexpr T besselI0(const T x) noexcept {
     T   sum  = 1;
     T   term = 1;
     int k    = 1;
@@ -60,6 +65,8 @@ constexpr T bessel_i0(const T x) noexcept {
 
     return sum;
 }
+
+namespace detail {
 
 // the Kaiser default is a mild beta near the low end of the useful range; a caller who wants a stated
 // sidelobe level passes kaiserBeta(attenuationDb)
@@ -250,10 +257,10 @@ void create(ContainerType& container, Type windowFunction, const T param = std::
         }
 
         const T factor = static_cast<T>(1) / static_cast<T>(n - 1);
-        const T i0Beta = detail::bessel_i0(p); // Compute the zeroth order modified Bessel function of the first kind for beta
+        const T i0Beta = besselI0(p); // Compute the zeroth order modified Bessel function of the first kind for beta
         detail::fillSymmetric<T>(container, n, [p, factor, i0Beta](const std::size_t i) {
             const T term = (static_cast<T>(2 * i) * factor) - static_cast<T>(1);
-            return detail::bessel_i0(p * std::sqrt(std::abs(static_cast<T>(1) - term * term))) / i0Beta;
+            return besselI0(p * std::sqrt(std::abs(static_cast<T>(1) - term * term))) / i0Beta;
         });
         return;
     }

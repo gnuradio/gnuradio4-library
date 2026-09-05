@@ -73,16 +73,6 @@ void printFilter(std::string_view name, const Container& filters) {
     return narrowed;
 }
 
-// signed zero-phase amplitude of a symmetric (linear-phase) FIR, i.e. H(f) with the delay term divided out
-[[nodiscard]] inline double firZeroPhaseAmplitude(const gr::filter::FilterCoefficients<double>& filter, double normalizedFrequency) {
-    const double         center = static_cast<double>(filter.b.size() - 1UZ) / 2.;
-    std::complex<double> acc{};
-    for (std::size_t n = 0UZ; n < filter.b.size(); ++n) {
-        acc += filter.b[n] * std::polar(1., -2. * std::numbers::pi * normalizedFrequency * (static_cast<double>(n) - center));
-    }
-    return acc.real();
-}
-
 template<std::size_t width = 51, std::size_t height = 21>
 void poleZeroPlot(const gr::filter::iir::PoleZeroLocations& value, double radius = 2.0) {
     constexpr std::size_t samples = 360Z;
@@ -886,8 +876,8 @@ const boost::ut::suite<"FIR FilterTool"> firFilterToolTests = [] {
         expect(le(calculateResponse<Normalised, Magnitude>(center, filter), 0.01)) << std::format("stop-band rejection at the band center: {:.5f}", calculateResponse<Normalised, Magnitude>(center, filter));
         expect(approx(calculateResponse<Normalised, Magnitude>(0., filter), 1., 0.05)) << "pass-band ripple at DC";
         expect(approx(calculateResponse<Normalised, Magnitude>(0.5, filter), 1., 0.05)) << "pass-band ripple at Nyquist";
-        expect(gt(firZeroPhaseAmplitude(filter, 0.), 0.)) << "DC gain is +1";
-        expect(gt(firZeroPhaseAmplitude(filter, 0.5), 0.)) << "Nyquist gain is +1";
+        expect(gt(gr::filter::signedAmplitudeAt(filter, 0.), 0.)) << "DC gain is +1";
+        expect(gt(gr::filter::signedAmplitudeAt(filter, 0.5), 0.)) << "Nyquist gain is +1";
     };
 
     // 100-300 Hz band-pass at fs=1000: passes the band at +1, sign included
@@ -897,9 +887,55 @@ const boost::ut::suite<"FIR FilterTool"> firFilterToolTests = [] {
         const double   center  = std::sqrt(kParams.fLow * kParams.fHigh) / kParams.fs;
 
         expect(approx(calculateResponse<Normalised, Magnitude>(center, filter), 1., 0.05)) << "pass-band magnitude at the band center";
-        expect(gt(firZeroPhaseAmplitude(filter, center), 0.)) << std::format("pass-band gain is +1, not -1: {:.5f}", firZeroPhaseAmplitude(filter, center));
+        expect(gt(gr::filter::signedAmplitudeAt(filter, center), 0.)) << std::format("pass-band gain is +1, not -1: {:.5f}", gr::filter::signedAmplitudeAt(filter, center));
         expect(le(calculateResponse<Normalised, Magnitude>(0., filter), 0.05)) << "stop-band at DC";
         expect(le(calculateResponse<Normalised, Magnitude>(0.5, filter), 0.05)) << "stop-band at Nyquist";
+    };
+
+    // Kaiser's empirical fit and the two knees in it: no shaping below 21 dB, the linear branch above 50
+    "the Kaiser shape parameter"_test = [] {
+        expect(approx(fir::kaiserBeta(80.0), 0.1102 * (80.0 - 8.7), 1e-15));
+        expect(approx(fir::kaiserBeta(60.0), 0.1102 * (60.0 - 8.7), 1e-15));
+        expect(approx(fir::kaiserBeta(60.0), 5.65326, 1e-5)) << "the value a 60 dB design is shaped with";
+        expect(eq(fir::kaiserBeta(21.0), 0.0)) << "no shaping is asked for below 21 dB";
+        expect(eq(fir::kaiserBeta(20.0), 0.0));
+        expect(gt(fir::kaiserBeta(50.0), fir::kaiserBeta(30.0)));
+        expect(gt(fir::kaiserBeta(80.0), fir::kaiserBeta(50.0)));
+    };
+
+    // A(f) against |H(f)|: the same size everywhere, and a sign the magnitude has thrown away
+    "the signed amplitude carries the sign the magnitude drops"_test = [] {
+        constexpr auto kParams  = FilterParameters{.order = 4UZ, .fLow = 100., .fHigh = 300., .fs = 1000.};
+        const auto     bandStop = fir::designFilter<double>(gr::filter::Type::BANDSTOP, kParams, Kaiser);
+
+        for (const double f : {0., 0.1, 0.2, 0.3, 0.4, 0.5}) {
+            expect(approx(std::abs(signedAmplitudeAt(bandStop, f)), calculateResponse<Normalised, Magnitude>(f, bandStop), 1e-12)) << std::format("|A| is |H| at {}", f);
+        }
+
+        // [1, 1, 1] has A(w) = 1 + 2cos(w), so A is -1 at Nyquist where the magnitude is +1
+        const FilterCoefficients<double> boxcar{{1., 1., 1.}};
+        expect(approx(signedAmplitudeAt(boxcar, 0.5), -1., 1e-12)) << "A is negative where the magnitude is one";
+        expect(approx(calculateResponse<Normalised, Magnitude>(0.5, boxcar), 1., 1e-12));
+    };
+
+    // normalizing against A rather than |H| is what keeps a design the way round it was designed
+    "normalizing against the signed amplitude keeps the polarity"_test = [] {
+        FilterCoefficients<double> signedReference{{1., 1., 1.}};
+        const auto [ok, reference] = normaliseFilterCoefficients(signedReference, 0.5, 2., NormalizationReference::SignedAmplitude);
+        expect(that % ok);
+        expect(approx(reference, -1., 1e-12)) << "the reference reported is the signed one";
+        expect(approx(signedAmplitudeAt(signedReference, 0.5), 2., 1e-12)) << "and the design reads +2 at Nyquist, not -2";
+
+        FilterCoefficients<double> magnitudeReference{{1., 1., 1.}};
+        const auto [okMagnitude, magnitude] = normaliseFilterCoefficients(magnitudeReference, 0.5, 2.);
+        expect(that % okMagnitude);
+        expect(approx(magnitude, 1., 1e-12));
+        expect(approx(signedAmplitudeAt(magnitudeReference, 0.5), -2., 1e-12)) << "normalizing against |H| leaves the design inverted";
+
+        FilterCoefficients<double> atItsOwnNull{{1., 0., -1.}};
+        const auto [okNull, atNull] = normaliseFilterCoefficients(atItsOwnNull, 0., 1., NormalizationReference::SignedAmplitude);
+        expect(that % !okNull) << "a null cannot be a normalization reference";
+        expect(approx(atNull, 0., 1e-15));
     };
 
     tag("visual") / "basic fir tests"_test = []() {
