@@ -2,6 +2,7 @@
 
 #include <gnuradio-4.0/algorithm/rng/Xoshiro256pp.hpp>
 #include <gnuradio-4.0/algorithm/signal/NoiseGenerator.hpp>
+#include <gnuradio-4.0/algorithm/signal/Phasor.hpp>
 #include <gnuradio-4.0/algorithm/signal/SignalGeneratorCore.hpp>
 #include <gnuradio-4.0/algorithm/signal/ToneGenerator.hpp>
 
@@ -18,6 +19,10 @@ void benchTones(std::string_view typeName) {
              {gr::signal::ToneType::FastSin, "phasor sin"},
              {gr::signal::ToneType::Cos, "std::cos"},
              {gr::signal::ToneType::FastCos, "phasor cos"},
+             // the waveforms that carry no transcendental, where the cost of forming the instant is the cost
+             {gr::signal::ToneType::Square, "square"},
+             {gr::signal::ToneType::Saw, "saw"},
+             {gr::signal::ToneType::Triangle, "triangle"},
          }) {
         for (std::size_t N : {100UZ, 1024UZ, 65536UZ}) {
             gr::signal::ToneGenerator<F> gen;
@@ -250,9 +255,55 @@ void benchmarkInteger() {
     };
 }
 
+template<std::floating_point F, std::size_t NRep = 500UZ>
+void benchPhasor(std::string_view typeName) {
+    using namespace benchmark;
+    for (std::size_t N : {100UZ, 1024UZ, 65536UZ}) {
+        std::vector<std::complex<F>> out(N);
+        std::vector<std::complex<F>> in(N, std::complex<F>(F(1), F(0)));
+        std::vector<F>               increments(N, F(0.01));
+
+        {
+            gr::signal::Phasor<F> phasor;
+            phasor.configure(0.2718281828459045, 0.);
+            const auto bmName                                         = std::format("{:14} - {:6},N={:5}", "phasor fill", typeName, N);
+            ::benchmark::benchmark<NRep>(std::string_view(bmName), N) = [&] { phasor.fill(out); };
+        }
+        {
+            gr::signal::Phasor<F> phasor;
+            phasor.configure(0.2718281828459045, 0.);
+            const auto bmName                                         = std::format("{:14} - {:6},N={:5}", "phasor mix", typeName, N);
+            ::benchmark::benchmark<NRep>(std::string_view(bmName), N) = [&] { phasor.mix(in, out); };
+        }
+        {
+            // scalar by construction: the per-sample increments break the lane recurrence, so this path pays a
+            // sin/cos per sample where the fixed-increment ones pay one per re-seed interval
+            gr::signal::Phasor<F> phasor;
+            phasor.configure(0., 0.);
+            const auto bmName                                         = std::format("{:14} - {:6},N={:5}", "phasor fillMod", typeName, N);
+            ::benchmark::benchmark<NRep>(std::string_view(bmName), N) = [&] { phasor.fillModulated(std::span<const F>(increments), std::span<std::complex<F>>(out)); };
+        }
+    }
+}
+
+void benchmarkPhasor() {
+    using boost::ut::operator""_test;
+
+    "phasor: float"_test = [] {
+        benchPhasor<float>("float");
+        ::benchmark::results::add_separator();
+    };
+
+    "phasor: double"_test = [] {
+        benchPhasor<double>("double");
+        ::benchmark::results::add_separator();
+    };
+}
+
 inline const boost::ut::suite<"signal generator benchmarks"> _signal_gen_bm = [] {
     benchmarkPrng();
     benchmarkTones();
+    benchmarkPhasor();
     benchmarkNoise();
     benchmarkStlNoise();
     benchmarkInteger();
