@@ -2,11 +2,14 @@
 #define GNURADIO_ALGORITHM_FEC_REED_SOLOMON_HPP
 
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 /**
- * Reed-Solomon over GF(2^M), shortened, with the generator's roots at alpha^1 upward.
+ * Reed-Solomon over GF(2^M), shortened, with the generator's roots at a stated power of a stated
+ * primitive element upward.
  *
  * A code is fixed by its field — the symbol width M and the primitive polynomial — and by how
  * many parity symbols R it carries; the natural block length is 2^M - 1 symbols and the code
@@ -36,9 +39,23 @@
  * Forney's formula for the magnitudes, with the field's logarithm and antilogarithm tables
  * carrying every multiplication. Erasures are not supported: no consumer knows which symbols
  * are doubtful in the sense the erasure path needs, and the code that is not written cannot
- * be the code that is wrong. The generator's first root is alpha^1, the convention every
- * validated instantiation shares; a code family rooted elsewhere brings its own oracle when
- * it brings its first consumer.
+ * be the code that is wrong.
+ *
+ * **Where the generator's roots start, and how far apart they are.** A Reed-Solomon code is fixed
+ * by its field and by the `Roots` consecutive powers its generator vanishes at, and two families
+ * disagree about which powers those are. The roots are `beta^f .. beta^(f+Roots-1)` with
+ * `beta = alpha^PrimitiveStep` and `f = FirstConsecutiveRoot`; both default to 1, which is the plain
+ * convention and leaves every existing instantiation bit-identical. CCSDS 131.0-B-5 4.3.4
+ * writes its generator as the product over `j = 128-E .. 127+E` of `(x - alpha^(11j))`, so its two
+ * numbers are read straight off the product limits: `PrimitiveStep = 11` and
+ * `FirstConsecutiveRoot = 128 - E`, which is 112 at `E = 16` and 120 at `E = 8`.
+ *
+ * Four places carry the two parameters and every one of them reduces to the plain expression at
+ * `f = 1, PrimitiveStep = 1`: the generator's roots, the syndrome evaluation points, the Chien
+ * search's step, and Forney's magnitude, which gains the factor `X^(1-f)`. That factor is the one
+ * that is easy to leave out, and leaving it out produces a decoder that locates errors correctly
+ * and corrects them wrongly — caught here by the post-correction syndrome check, which then fails
+ * on every correctable word rather than on none.
  */
 namespace gr::fec {
 
@@ -82,6 +99,27 @@ template<std::size_t SymbolBits, unsigned FieldPoly>
 template<std::size_t SymbolBits, unsigned FieldPoly>
 inline constexpr GfTables<SymbolBits, FieldPoly> kGf = buildGfTables<SymbolBits, FieldPoly>();
 
+/// The greatest common divisor, for the coprimality a primitive step has to satisfy.
+[[nodiscard]] constexpr unsigned greatestCommonDivisor(unsigned a, unsigned b) noexcept {
+    while (b != 0U) {
+        const unsigned rest = a % b;
+        a                   = b;
+        b                   = rest;
+    }
+    return a;
+}
+
+/// The product of two field elements through the logarithm tables, zero absorbing.
+template<std::size_t SymbolBits, unsigned FieldPoly>
+[[nodiscard]] constexpr std::uint8_t gfMultiply(std::uint8_t a, std::uint8_t b) noexcept {
+    constexpr auto&       gf      = kGf<SymbolBits, FieldPoly>;
+    constexpr std::size_t nonzero = GfTables<SymbolBits, FieldPoly>::kNonzero;
+    if (a == 0U || b == 0U) {
+        return 0U;
+    }
+    return gf.exp[(static_cast<unsigned>(gf.log[a]) + static_cast<unsigned>(gf.log[b])) % static_cast<unsigned>(nonzero)];
+}
+
 } // namespace detail
 
 /**
@@ -91,7 +129,7 @@ inline constexpr GfTables<SymbolBits, FieldPoly> kGf = buildGfTables<SymbolBits,
  * shortened code is used by holding the first `pad` symbols at zero. Symbols are one byte
  * each, which serves every field through GF(256).
  */
-template<std::size_t SymbolBits, unsigned FieldPoly, std::size_t Roots>
+template<std::size_t SymbolBits, unsigned FieldPoly, std::size_t Roots, unsigned FirstConsecutiveRoot = 1U, unsigned PrimitiveStep = 1U>
 struct ReedSolomon {
     static_assert(SymbolBits >= 2UZ && SymbolBits <= 8UZ, "a symbol is carried in one byte");
     static_assert((FieldPoly >> SymbolBits) == 1U, "the field polynomial carries the x^M term and nothing above it");
@@ -101,20 +139,27 @@ struct ReedSolomon {
     static constexpr unsigned     kCorrectable = static_cast<unsigned>(Roots / 2UZ);
     static constexpr std::uint8_t kLogZero     = static_cast<std::uint8_t>(kBlock); ///< the logarithm zero does not have
 
+    static_assert(PrimitiveStep >= 1U && detail::greatestCommonDivisor(PrimitiveStep, static_cast<unsigned>(kBlock)) == 1U, "the primitive step must be coprime with the block length, or the powers of beta do not run over the whole field and the roots repeat");
+    static_assert(FirstConsecutiveRoot < static_cast<unsigned>(kBlock), "the first consecutive root is an exponent of beta and lives below the block length");
+
     using Block = std::array<std::uint8_t, kBlock>;
 
     /// Reduce an exponent into 0..kBlock-1. Exponents arrive as sums, differences and small
     /// multiples of table indices, so the reduction is a plain remainder rather than a subtraction.
     [[nodiscard]] static constexpr unsigned modExp(unsigned x) noexcept { return x % static_cast<unsigned>(kBlock); }
 
-    /// The generator polynomial in logarithm form, constant term first; roots alpha^1 .. alpha^Roots.
+    /// The alpha exponent of the `index`-th generator root, `beta^(FirstConsecutiveRoot + index)`.
+    [[nodiscard]] static constexpr unsigned rootExponent(std::size_t index) noexcept { return modExp(PrimitiveStep * (FirstConsecutiveRoot + static_cast<unsigned>(index))); }
+
+    /// The generator polynomial in logarithm form, constant term first; its roots are the `Roots`
+    /// consecutive powers `beta^FirstConsecutiveRoot` upward.
     [[nodiscard]] static constexpr std::array<std::uint8_t, Roots + 1UZ> generator() noexcept {
         constexpr auto& gf = detail::kGf<SymbolBits, FieldPoly>;
 
         std::array<std::uint8_t, Roots + 1UZ> g{};
         g[0] = 1U;
         for (std::size_t i = 0UZ; i < Roots; ++i) {
-            const unsigned root = static_cast<unsigned>(i + 1UZ);
+            const unsigned root = rootExponent(i);
             g[i + 1UZ]          = 1U;
             for (std::size_t j = i; j > 0UZ; --j) {
                 if (g[j] != 0U) {
@@ -162,13 +207,14 @@ struct ReedSolomon {
         constexpr auto& gf = detail::kGf<SymbolBits, FieldPoly>;
         RsResult        result;
 
-        // Syndromes: the received polynomial evaluated at alpha^1 .. alpha^Roots.
+        // Syndromes: the received polynomial evaluated at the generator's own roots.
         std::array<std::uint8_t, Roots> syndrome{};
         std::uint8_t                    any = 0U;
         for (std::size_t i = 0UZ; i < Roots; ++i) {
-            std::uint8_t s = block[0];
+            const unsigned point = rootExponent(i);
+            std::uint8_t   s     = block[0];
             for (std::size_t j = 1UZ; j < kBlock; ++j) {
-                s = static_cast<std::uint8_t>(block[j] ^ ((s == 0U) ? 0U : gf.exp[modExp(static_cast<unsigned>(gf.log[s]) + static_cast<unsigned>(i + 1UZ))]));
+                s = static_cast<std::uint8_t>(block[j] ^ ((s == 0U) ? 0U : gf.exp[modExp(static_cast<unsigned>(gf.log[s]) + point)]));
             }
             syndrome[i] = s;
             any         = static_cast<std::uint8_t>(any | s);
@@ -240,7 +286,8 @@ struct ReedSolomon {
             return result; // syndromes nonzero but no locator: not a correctable word
         }
 
-        // Chien search: alpha^-i is a root of lambda exactly when symbol i is in error.
+        // Chien search: beta^-i is a root of lambda exactly when symbol i is in error, so the
+        // register steps by PrimitiveStep in the alpha exponent rather than by one.
         std::array<unsigned, Roots>       rootExp{};
         std::array<unsigned, Roots>       location{};
         std::array<unsigned, Roots + 1UZ> reg{};
@@ -253,14 +300,14 @@ struct ReedSolomon {
             std::uint8_t q = 1U;
             for (std::size_t j = degree; j > 0UZ; --j) {
                 if (reg[j] != kLogZero) {
-                    reg[j] = modExp(reg[j] + static_cast<unsigned>(j));
+                    reg[j] = modExp(reg[j] + static_cast<unsigned>(j) * PrimitiveStep);
                     q ^= gf.exp[reg[j]];
                 }
             }
             if (q != 0U) {
                 continue;
             }
-            rootExp[found]  = static_cast<unsigned>(i);
+            rootExp[found]  = modExp(PrimitiveStep * static_cast<unsigned>(i));
             location[found] = static_cast<unsigned>(i - 1UZ);
             if (++found == degree) {
                 break;
@@ -304,7 +351,12 @@ struct ReedSolomon {
             if (numerator == 0U || denominator == 0U) {
                 continue;
             }
-            const unsigned magnitude = modExp(static_cast<unsigned>(gf.log[numerator]) + static_cast<unsigned>(kBlock) - gf.log[denominator]);
+            // e = X^(1-f) * omega(X^-1) / lambda'(X^-1). `rootExp[k]` is the alpha exponent of
+            // X^-1, so X is alpha^(kBlock - rootExp[k]) and the factor's exponent is that times
+            // 1 - f reduced into the exponent group. At f = 1 the factor is one and drops out.
+            const unsigned inverseExp = modExp(static_cast<unsigned>(kBlock) - rootExp[k]);
+            const unsigned factorExp  = modExp(inverseExp * modExp(static_cast<unsigned>(kBlock) + 1U - FirstConsecutiveRoot));
+            const unsigned magnitude  = modExp(factorExp + static_cast<unsigned>(gf.log[numerator]) + static_cast<unsigned>(kBlock) - gf.log[denominator]);
             block[location[k]] ^= gf.exp[magnitude];
             ++result.errors;
         }
@@ -318,9 +370,10 @@ struct ReedSolomon {
         // The corrected block must now be a codeword. Where it is not, the locator described
         // some other word and the symbols handed back would be an invention.
         for (std::size_t i = 0UZ; i < Roots; ++i) {
-            std::uint8_t s = block[0];
+            const unsigned point = rootExponent(i);
+            std::uint8_t   s     = block[0];
             for (std::size_t j = 1UZ; j < kBlock; ++j) {
-                s = static_cast<std::uint8_t>(block[j] ^ ((s == 0U) ? 0U : gf.exp[modExp(static_cast<unsigned>(gf.log[s]) + static_cast<unsigned>(i + 1UZ))]));
+                s = static_cast<std::uint8_t>(block[j] ^ ((s == 0U) ? 0U : gf.exp[modExp(static_cast<unsigned>(gf.log[s]) + point)]));
             }
             if (s != 0U) {
                 return result;
@@ -335,6 +388,188 @@ struct ReedSolomon {
 /// The GF(64) family on x^6 + x + 1, the field P25 Phase 1's three codes share.
 template<std::size_t Roots>
 using ReedSolomon6 = ReedSolomon<6UZ, 0x43U, Roots>;
+
+/// The GF(256) family CCSDS 131.0-B-5 section 4 specifies: `F(x) = x^8 + x^7 + x^2 + x + 1` as the
+/// integer `0x187`, and the generator's roots stepping by `alpha^11`. `Fcr` is `128 - E`, read off
+/// 4.3.4's lower product limit, so the two codes are `ReedSolomonCcsds<32UZ, 112U>` at `E = 16`,
+/// which is RS(255,223), and `ReedSolomonCcsds<16UZ, 120U>` at `E = 8`, which is RS(255,239).
+template<std::size_t Roots, unsigned Fcr>
+using ReedSolomonCcsds = ReedSolomon<8UZ, 0x187U, Roots, Fcr, 11U>;
+
+using ReedSolomonCcsds255_223 = ReedSolomonCcsds<32UZ, 112U>;
+using ReedSolomonCcsds255_239 = ReedSolomonCcsds<16UZ, 120U>;
+
+/**
+ * @brief The dual (Berlekamp) basis of GF(2^M), as the two element-wise recodings between it and the
+ * conventional basis.
+ *
+ * The conventional basis is `(1, alpha, ..., alpha^(M-1))`, so an element is
+ * `u_(M-1) alpha^(M-1) + ... + u_1 alpha + u_0`. A second basis is `(1, b, b^2, ..., b^(M-1))` with
+ * `b = alpha^BasisExponent`, and the **dual** basis `(l_0, ..., l_(M-1))` is defined by
+ * `Tr(l_i b^j) = 1` when `i == j` and `0` otherwise, where the trace is
+ * `Tr(z) = sum over k = 0..M-1 of z^(2^k)`. A symbol in the dual representation is
+ * `z_0 l_0 + ... + z_(M-1) l_(M-1)`.
+ *
+ * Everything follows from those two sentences in one line. Taking the trace of `w b^j` where
+ * `w = sum_i z_i l_i` gives `Tr(w b^j) = sum_i z_i Tr(l_i b^j) = z_j`, so
+ *
+ *     z_j = Tr(w * b^j) = sum over k of u_k * T[j][k],   T[j][k] = Tr(alpha^k * alpha^(BasisExponent*j))
+ *
+ * which is an M by M matrix over GF(2) computed from the field polynomial alone. The map is a
+ * GF(2)-linear bijection, so a table of `2^M` entries realizes it and its inverse is the scatter of
+ * that table — built here with a written-count check, on the pattern `Golay.hpp` uses for its coset
+ * table, so a `BasisExponent` whose first M powers are not independent leaves every lookup zero and
+ * `isBijective()` false. Each named basis asserts `isBijective()` where it is named, so such an
+ * exponent is a build failure there rather than a quietly wrong table.
+ *
+ * **Octet packing.** CCSDS 131.0-B-5 1.6.3 numbers the first transmitted bit of a field as the most
+ * significant, and 4.3.9.2 transmits `z_0` first, so `z_j` occupies bit `M-1-j` of the dual octet
+ * while `u_k` occupies bit `k` of the conventional one in the ordinary way. Both packings are stated
+ * because they are the only remaining place a correct transformation still produces a wrong byte.
+ *
+ * `T` is GF(2)-linear but is **not** a field isomorphism — it does not preserve multiplication — so
+ * every arithmetic step stays in the conventional representation and the recoding is applied to a
+ * whole block before and after a call, never inside the decoder's loops.
+ */
+template<std::size_t SymbolBits, unsigned FieldPoly, unsigned BasisExponent>
+struct DualBasis {
+    static_assert(SymbolBits >= 2UZ && SymbolBits <= 8UZ, "a symbol is carried in one byte");
+
+    static constexpr std::size_t kElements = 1UZ << SymbolBits;
+    static constexpr std::size_t kNonzero  = kElements - 1UZ;
+
+    /// `Tr(z) = sum over k of z^(2^k)`, which lands in the prime subfield and so is 0 or 1.
+    [[nodiscard]] static constexpr std::uint8_t trace(std::uint8_t z) noexcept {
+        std::uint8_t sum   = 0U;
+        std::uint8_t power = z;
+        for (std::size_t k = 0UZ; k < SymbolBits; ++k) {
+            sum   = static_cast<std::uint8_t>(sum ^ power);
+            power = detail::gfMultiply<SymbolBits, FieldPoly>(power, power);
+        }
+        return sum;
+    }
+
+    /// Row `j` of `T` as a bitmask, bit `k` holding `T[j][k] = Tr(alpha^k * b^j)`.
+    [[nodiscard]] static constexpr std::array<std::uint8_t, SymbolBits> traceMatrix() noexcept {
+        constexpr auto&                      gf = detail::kGf<SymbolBits, FieldPoly>;
+        std::array<std::uint8_t, SymbolBits> rows{};
+        for (std::size_t j = 0UZ; j < SymbolBits; ++j) {
+            const unsigned basis = (BasisExponent * static_cast<unsigned>(j)) % static_cast<unsigned>(kNonzero);
+            std::uint8_t   row   = 0U;
+            for (std::size_t k = 0UZ; k < SymbolBits; ++k) {
+                const std::uint8_t element = gf.exp[(basis + static_cast<unsigned>(k)) % static_cast<unsigned>(kNonzero)];
+                row                        = static_cast<std::uint8_t>(row | (trace(element) << k));
+            }
+            rows[j] = row;
+        }
+        return rows;
+    }
+
+    /// The conventional-to-dual table, `z_j` at bit `M-1-j`.
+    [[nodiscard]] static constexpr std::array<std::uint8_t, kElements> forwardTable() noexcept {
+        constexpr auto                      rows = traceMatrix();
+        std::array<std::uint8_t, kElements> table{};
+        for (std::size_t value = 0UZ; value < kElements; ++value) {
+            std::uint8_t dual = 0U;
+            for (std::size_t j = 0UZ; j < SymbolBits; ++j) {
+                const unsigned parity = static_cast<unsigned>(std::popcount(static_cast<unsigned>(rows[j]) & static_cast<unsigned>(value))) & 1U;
+                dual                  = static_cast<std::uint8_t>(dual | (parity << (SymbolBits - 1UZ - j)));
+            }
+            table[value] = dual;
+        }
+        return table;
+    }
+
+    /// The scatter of `forwardTable()`, with the coverage check that says the basis is a basis.
+    [[nodiscard]] static constexpr std::array<std::uint8_t, kElements> inverseTable() noexcept {
+        constexpr auto                      forward = forwardTable();
+        std::array<std::uint8_t, kElements> table{};
+        std::array<std::uint8_t, kElements> written{};
+        for (std::size_t value = 0UZ; value < kElements; ++value) {
+            table[forward[value]] = static_cast<std::uint8_t>(value);
+            ++written[forward[value]];
+        }
+        for (const std::uint8_t count : written) {
+            if (count != 1U) {
+                return {}; // not a bijection: `isBijective()` reports it and every lookup is zero
+            }
+        }
+        return table;
+    }
+
+    static constexpr std::array<std::uint8_t, kElements> kToDual   = forwardTable();
+    static constexpr std::array<std::uint8_t, kElements> kFromDual = inverseTable();
+
+    [[nodiscard]] static constexpr std::uint8_t toDual(std::uint8_t conventional) noexcept { return kToDual[conventional]; }
+    [[nodiscard]] static constexpr std::uint8_t fromDual(std::uint8_t dual) noexcept { return kFromDual[dual]; }
+
+    /// Whether the two tables invert each other over the whole field. A caller has no reason to ask;
+    /// a test does, and so does a `BasisExponent` nobody has checked.
+    [[nodiscard]] static constexpr bool isBijective() noexcept {
+        for (std::size_t value = 0UZ; value < kElements; ++value) {
+            const std::uint8_t element = static_cast<std::uint8_t>(value);
+            if (fromDual(toDual(element)) != element || toDual(fromDual(element)) != element) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// The dual basis element `l_i`, in the conventional representation: column `i` of `T^-1`, which
+    /// is what the dual octet carrying only `z_i` maps back to.
+    [[nodiscard]] static constexpr std::uint8_t basisElement(std::size_t index) noexcept { return fromDual(static_cast<std::uint8_t>(1U << (SymbolBits - 1UZ - index))); }
+};
+
+/// The basis CCSDS 131.0-B-5 4.4.2 names: GF(256) on `0x187` with `b = alpha^117`. That element has
+/// multiplicative order 85 and so is not primitive, and nothing requires it to be — only that its
+/// first eight powers are linearly independent, which `isBijective()` is the check of.
+using CcsdsDualBasis = DualBasis<8UZ, 0x187U, 117U>;
+static_assert(CcsdsDualBasis::isBijective(), "gr::fec::CcsdsDualBasis: the first eight powers of alpha^117 must be linearly independent, or the dual-basis tables do not invert each other");
+
+/**
+ * @brief The symbol interleaving of CCSDS 131.0-B-5 4.4.1, as the index map it is.
+ *
+ * A commutator distributes successive codeblock symbols across `depth` encoders and a second
+ * commutator reassembles them in step, which stated as an index map is: codeblock symbol `s` belongs
+ * to codeword `s mod depth` at position `s div depth` within it. At `depth = 1` the map is the
+ * identity and the codeblock is one codeword, which is the standard's own statement that `I = 1` is
+ * the absence of interleaving.
+ *
+ * Shortening composes with it exactly as the standard states: the fill `Q` is a multiple of `depth`
+ * (4.3.7.3), so every codeword carries the same `pad = Q / depth` leading zeros and a shortened
+ * transmitted codeblock is `(kBlock - pad) * depth` symbols. That makes this map exactly
+ * `Interleaver<std::uint8_t>::block(kBlock - pad, depth)` written out, which is what the qa proves
+ * rather than what this comment asserts. It is written out because it is two lines of index
+ * arithmetic belonging to one codeblock, and reaching the interleaver for them would make this
+ * header depend on `fec/Interleaver.hpp`; the qa holds the two against each other instead.
+ *
+ * The code itself stays a one-codeword entity: these are free functions over a whole codeblock, not
+ * members, because interleaving is a property of how codewords are laid out on the wire and not of
+ * the code.
+ */
+[[nodiscard]] inline constexpr bool ccsdsInterleaveDepthAllowed(std::size_t depth) noexcept { return depth == 1UZ || depth == 2UZ || depth == 3UZ || depth == 4UZ || depth == 5UZ || depth == 8UZ; }
+
+/// Gather `depth` contiguous codewords of `rows` symbols each into one interleaved codeblock.
+inline void interleaveCodewords(std::span<const std::uint8_t> codewords, std::span<std::uint8_t> codeblock, std::size_t rows, std::size_t depth) noexcept {
+    const std::size_t count = rows * depth;
+    if (codewords.size() < count || codeblock.size() < count) {
+        return;
+    }
+    for (std::size_t s = 0UZ; s < count; ++s) {
+        codeblock[s] = codewords[(s % depth) * rows + (s / depth)];
+    }
+}
+
+/// The inverse gather: one interleaved codeblock back into `depth` contiguous codewords.
+inline void deinterleaveCodewords(std::span<const std::uint8_t> codeblock, std::span<std::uint8_t> codewords, std::size_t rows, std::size_t depth) noexcept {
+    const std::size_t count = rows * depth;
+    if (codeblock.size() < count || codewords.size() < count) {
+        return;
+    }
+    for (std::size_t s = 0UZ; s < count; ++s) {
+        codewords[(s % depth) * rows + (s / depth)] = codeblock[s];
+    }
+}
 
 } // namespace gr::fec
 
