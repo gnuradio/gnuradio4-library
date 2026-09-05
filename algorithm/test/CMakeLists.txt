@@ -1,4 +1,5 @@
 add_ut_test(qa_MeasurementSlot)
+add_ut_test(qa_MeasurementRecord)
 add_ut_test(qa_Xoshiro256pp)
 add_ut_test(qa_GaussianNoise)
 add_ut_test(qa_NoiseGenerator)
@@ -70,6 +71,7 @@ if(EMSCRIPTEN)
 endif()
 
 target_link_libraries(qa_MeasurementSlot PRIVATE gnuradio-algorithm)
+target_link_libraries(qa_MeasurementRecord PRIVATE gnuradio-algorithm)
 target_link_libraries(qa_Xoshiro256pp PRIVATE gnuradio-algorithm)
 target_link_libraries(qa_GaussianNoise PRIVATE gnuradio-algorithm)
 target_link_libraries(qa_NoiseGenerator PRIVATE gnuradio-algorithm)
