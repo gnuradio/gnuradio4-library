@@ -55,6 +55,15 @@ constexpr Parameters kCatalog[] = {
     {"CRC-32/MPEG-2", 32U, 0x04C11DB7ULL, 0xFFFFFFFFULL, 0x00000000ULL, false, false, 0x0376E6E7ULL}, //
     {"CRC-64/ECMA-182", 64U, 0x42F0E1EBA9EA3693ULL, 0ULL, 0ULL, false, false, 0x6C40DF5F0B497347ULL}, //
     {"CRC-64/XZ", 64U, 0x42F0E1EBA9EA3693ULL, ~0ULL, ~0ULL, true, true, 0x995DC9BBDF1939FAULL},       //
+    // The two rows this file adds. Their parameters and check values were derived here, three ways
+    // each, and taken from no catalog. CRC-16/XMODEM is the CCITT polynomial seeded with zero rather
+    // than all ones -- it is not CRC-16/KERMIT above, which reflects both input and output where
+    // XMODEM reflects neither, so the two share only their polynomial. CRC-16/CC11XX is the
+    // parameter set the Texas Instruments CC11xx transceiver family's packet engine uses; the RevEng
+    // catalog's own name for it could not be confirmed, so the row carries the vendor's name rather
+    // than an unverified catalog one.
+    {"CRC-16/XMODEM", 16U, 0x1021ULL, 0x0000ULL, 0x0000ULL, false, false, 0x31C3ULL}, //
+    {"CRC-16/CC11XX", 16U, 0x8005ULL, 0xFFFFULL, 0x0000ULL, false, false, 0xAEE7ULL}, //
 };
 
 [[nodiscard]] Crc kernelOf(const Parameters& p) { return Crc(p.width, p.polynomial, p.initialValue, p.finalXor, p.inputReflected, p.resultReflected); }
@@ -104,6 +113,45 @@ constexpr Parameters kCatalog[] = {
     return ((p.resultReflected ? reverseBits(reg, p.width) : reg) ^ (p.finalXor & mask)) & mask;
 }
 
+/// Implementation C: schoolbook long division of the augmented message polynomial, held as a bit
+/// vector rather than as a shift register. The initial value enters as `I(x) * x^n`, which is what
+/// presetting the register means, and the remainder is read off the tail. Unreflected sets only.
+[[nodiscard]] std::uint64_t longDivision(const Parameters& p, std::span<const std::uint8_t> message) {
+    const std::uint64_t mask = maskOf(p.width);
+    std::vector<bool>   bits;
+    bits.reserve(message.size() * 8UZ + p.width);
+    for (const std::uint8_t byte : message) {
+        for (int k = 7; k >= 0; --k) {
+            bits.push_back(((byte >> static_cast<unsigned>(k)) & 1U) != 0U);
+        }
+    }
+    for (std::uint8_t i = 0U; i < p.width; ++i) {
+        bits.push_back(false); // the augmentation, x^w * M(x)
+    }
+    for (std::uint8_t i = 0U; i < p.width && i < bits.size(); ++i) {
+        const bool seed = (((p.initialValue & mask) >> (p.width - 1U - i)) & 1ULL) != 0ULL;
+        bits[i]         = bits[i] != seed;
+    }
+
+    // The divisor is the generator with its implicit top term, width + 1 bits wide.
+    for (std::size_t i = 0UZ; i + p.width < bits.size(); ++i) {
+        if (!bits[i]) {
+            continue;
+        }
+        bits[i] = false;
+        for (std::uint8_t k = 0U; k < p.width; ++k) {
+            const bool term   = (((p.polynomial & mask) >> (p.width - 1U - k)) & 1ULL) != 0ULL;
+            bits[i + 1UZ + k] = bits[i + 1UZ + k] != term;
+        }
+    }
+
+    std::uint64_t remainder = 0ULL;
+    for (std::size_t i = bits.size() - p.width; i < bits.size(); ++i) {
+        remainder = (remainder << 1U) | (bits[i] ? 1ULL : 0ULL);
+    }
+    return (remainder ^ (p.finalXor & mask)) & mask;
+}
+
 [[nodiscard]] std::vector<std::uint8_t> checkMessage() { return {'1', '2', '3', '4', '5', '6', '7', '8', '9'}; }
 
 [[nodiscard]] std::vector<std::uint8_t> appended(const Crc& crc, std::span<const std::uint8_t> message, bool bigEndian) {
@@ -132,7 +180,7 @@ constexpr Parameters kCatalog[] = {
 const boost::ut::suite<"crc"> crcTests = [] {
     using namespace boost::ut;
 
-    "all eighteen catalog check values, through the kernel and through the definition"_test = [] {
+    "all twenty catalog check values, through the kernel and through the definition"_test = [] {
         const auto message = checkMessage();
         for (const Parameters& p : kCatalog) {
             const std::uint64_t fromKernel = kernelOf(p).compute(message);
@@ -372,6 +420,53 @@ const boost::ut::suite<"crc"> crcTests = [] {
 
     // Chunk independence needs no case of its own: the blocks are record-oriented and the kernel is
     // stateless, which the case above asserts directly.
+
+    "the two added rows reproduce their check values three ways"_test = [] {
+        // The requirement is that the agreement be evidence rather than coincidence, so the same three
+        // implementations reproduce the catalog's existing IBM-3740 row in the same run.
+        const auto message = checkMessage();
+        struct Row {
+            std::size_t   index;
+            std::uint64_t check;
+            const char*   what;
+        };
+        const std::array<Row, 3UZ> rows{Row{18UZ, 0x31C3ULL, "CRC-16/XMODEM"}, Row{19UZ, 0xAEE7ULL, "CRC-16/CC11XX"}, Row{7UZ, 0x29B1ULL, "CRC-16/IBM-3740, the control"}};
+
+        for (const Row& row : rows) {
+            const Parameters& p = kCatalog[row.index];
+            expect(eq(kernelOf(p).compute(message), row.check)) << std::format("{}: the kernel", row.what);
+            expect(eq(bitSerial(p, message), row.check)) << std::format("{}: the bit-serial definition", row.what);
+            expect(eq(msbFirstTable(p, message), row.check)) << std::format("{}: the MSB-first table", row.what);
+            expect(eq(longDivision(p, message), row.check)) << std::format("{}: polynomial long division", row.what);
+        }
+
+        // XMODEM is not KERMIT, and the difference is not the polynomial.
+        const Parameters& xmodem = kCatalog[18UZ];
+        const Parameters& kermit = kCatalog[8UZ];
+        expect(eq(xmodem.polynomial, kermit.polynomial)) << "they share only this";
+        expect(neq(kernelOf(xmodem).compute(message), kernelOf(kermit).compute(message))) << "and differ on every non-empty message";
+    };
+
+    "the two added rows have a zero residue, over five messages each"_test = [] {
+        const std::array<std::vector<std::uint8_t>, 5UZ> messages{std::vector<std::uint8_t>{}, std::vector<std::uint8_t>{0x00U}, std::vector<std::uint8_t>{0xFFU}, checkMessage(), [] {
+                                                                      std::vector<std::uint8_t> out(16UZ);
+                                                                      std::iota(out.begin(), out.end(), std::uint8_t{0U});
+                                                                      return out;
+                                                                  }()};
+
+        for (const std::size_t index : {18UZ, 19UZ}) {
+            const Parameters& p   = kCatalog[index];
+            const Crc         crc = kernelOf(p);
+            for (const std::vector<std::uint8_t>& message : messages) {
+                const std::vector<std::uint8_t> whole = appended(crc, message, true);
+                expect(eq(crc.compute(whole), 0x0000ULL)) << std::format("{}: residue over a {}-byte message", p.name, message.size());
+            }
+            // One flipped bit anywhere and the residue is no longer zero, which is what the residue is for.
+            std::vector<std::uint8_t> broken = appended(crc, checkMessage(), true);
+            broken[3]                        = static_cast<std::uint8_t>(broken[3] ^ 0x01U);
+            expect(neq(crc.compute(broken), 0x0000ULL)) << p.name;
+        }
+    };
 };
 
 int main() { /* tests are automatically registered and run */ }
