@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 /**
@@ -65,6 +66,7 @@ struct ConvolutionalCode {
     std::size_t                                    constraintLength = 0UZ; ///< K, the register's width in input bits
     std::size_t                                    polynomialCount  = 0UZ; ///< n, the coded bits one input step emits
     std::array<std::uint32_t, kConvMaxPolynomials> polynomials{};          ///< the generators, in output order
+    std::uint32_t                                  outputInversion = 0U;   ///< bit j set: output j is emitted complemented
 
     /// Accept @p length and @p generators as a code, or refuse them and leave this unconfigured.
     ///
@@ -72,10 +74,16 @@ struct ConvolutionalCode {
     /// emits a constant output that carries nothing, and two equal generators emit the same bit
     /// twice for a rate the code does not have. None of the three is a code, so each is refused
     /// here rather than left to produce an answer that looks like one.
-    [[nodiscard]] constexpr bool configure(std::size_t length, std::span<const std::uint32_t> generators) noexcept {
+    ///
+    /// @p inversion complements the named outputs on their way out. It is one exclusive-or in one
+    /// function, applied identically at both ends, so the trellis keeps its shape and the code
+    /// keeps its distance properties; a mask naming an output the code does not have is refused,
+    /// because it describes a rate this is not.
+    [[nodiscard]] constexpr bool configure(std::size_t length, std::span<const std::uint32_t> generators, std::uint32_t inversion = 0U) noexcept {
         constraintLength = 0UZ;
         polynomialCount  = 0UZ;
         polynomials      = {};
+        outputInversion  = 0U;
 
         if (length < kConvMinConstraintLength || length > kConvMaxConstraintLength) {
             return false;
@@ -94,9 +102,13 @@ struct ConvolutionalCode {
                 }
             }
         }
+        if ((inversion >> generators.size()) != 0U) {
+            return false;
+        }
 
         constraintLength = length;
         polynomialCount  = generators.size();
+        outputInversion  = inversion;
         std::copy(generators.begin(), generators.end(), polynomials.begin());
         return true;
     }
@@ -118,7 +130,7 @@ struct ConvolutionalCode {
     for (std::size_t j = 0UZ; j < code.polynomialCount; ++j) {
         coded |= static_cast<std::uint32_t>(std::popcount(code.polynomials[j] & window) & 1) << j;
     }
-    return coded;
+    return coded ^ (code.outputInversion & ((std::uint32_t{1U} << code.polynomialCount) - 1U));
 }
 
 /// The state @p input leaves the register in, coming from @p state.
@@ -432,6 +444,63 @@ private:
     std::vector<std::uint8_t>  _traceback; ///< the survivor's choice of predecessor, per step and state
     std::vector<std::uint32_t> _words;     ///< the received word per step, hard or sign-sliced
 };
+
+/**
+ * @brief A named convolutional convention: a constraint length, its generators in this header's
+ * spelling, and which outputs are complemented.
+ *
+ * **The spelling is the trap and it is why these names exist.** A standard writes a connection
+ * vector with the current input bit at the **left** — CCSDS 131.0-B-5 3.3.1 (4) gives
+ * `G1 = 1111001` and `G2 = 1011011`, octal `171` and `133`. This header reads a polynomial the other
+ * way, bit 0 tapping the current input, so the same two vectors enter as their 7-bit reversals,
+ * `1001111` and `1101101`, octal `0117` and `0155`. Entering `0171` and `0133` builds the
+ * time-reversed code: it has the same distance spectrum and the same bit error rate, so every
+ * performance test passes and the link does not decode. That is exactly the failure a name prevents,
+ * and the anchor that catches it needs no implementation to check against — drive the encoder with
+ * an isolated one and step `i` emits bit `i` of each polynomial, so the impulse response in time
+ * order is the standard's own vectors, `1,1,1,1,0,0,1` on `G1` and `1,0,1,1,0,1,1` on `G2` before
+ * the inversion 3.3.1 (5) applies to it.
+ *
+ * The four conventions differ only in which of the two symbols is emitted first and whether the
+ * inversion is present. The two uninverted ones are not variants of the standard: a receiver may
+ * already have flipped polarity in its demodulator or its soft mapping, and all four are in live
+ * use. None of them is a default; each is selected by name.
+ */
+struct ConvolutionalConvention {
+    std::string_view                               name;
+    std::size_t                                    constraintLength;
+    std::size_t                                    polynomialCount;
+    std::array<std::uint32_t, kConvMaxPolynomials> polynomials;
+    std::uint32_t                                  outputInversion;
+};
+
+/// The named conventions, in the order `conventionByName` reports when it does not find one.
+inline constexpr std::array<ConvolutionalConvention, 4> kConvConventions{{
+    {"ccsds", 7UZ, 2UZ, {0117U, 0155U, 0U, 0U}, 0b10U},           ///< 3.3.1: G1 first, G2 second with its output inverted
+    {"ccsds_uninverted", 7UZ, 2UZ, {0117U, 0155U, 0U, 0U}, 0U},   ///< the same order with the inversion removed downstream
+    {"nasa_dsn", 7UZ, 2UZ, {0155U, 0117U, 0U, 0U}, 0b01U},        ///< the inverted G2 symbol emitted first
+    {"nasa_dsn_uninverted", 7UZ, 2UZ, {0155U, 0117U, 0U, 0U}, 0U} ///< that order with the inversion removed
+}};
+
+/// The convention @p name selects, or `nullptr` when there is none of that name.
+[[nodiscard]] inline constexpr const ConvolutionalConvention* conventionByName(std::string_view name) noexcept {
+    for (const ConvolutionalConvention& entry : kConvConventions) {
+        if (entry.name == name) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+/// Configure @p code as the named convention, or leave it unconfigured and answer false.
+[[nodiscard]] inline bool configureConvention(ConvolutionalCode& code, std::string_view name) noexcept {
+    const ConvolutionalConvention* entry = conventionByName(name);
+    if (entry == nullptr) {
+        code = {};
+        return false;
+    }
+    return code.configure(entry->constraintLength, std::span<const std::uint32_t>{entry->polynomials.data(), entry->polynomialCount}, entry->outputInversion);
+}
 
 } // namespace gr::fec
 
