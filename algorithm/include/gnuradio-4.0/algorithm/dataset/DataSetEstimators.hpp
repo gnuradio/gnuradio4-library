@@ -39,6 +39,22 @@ namespace estimators {
 template<typename T>
 using WelfordAccumulator = std::conditional_t<std::is_integral_v<T>, double, T>;
 
+/// @brief arithmetic type of an estimator's intermediate results: an integral sample type is promoted to double, which
+/// holds every 32-bit integral sample exactly, so that a fractional intermediate is not truncated to zero.
+template<typename T>
+using PromotedAccumulator = std::conditional_t<std::is_integral_v<T>, double, T>;
+
+/// @brief converts an intermediate result to the sample type: an integral type takes the nearest sample value, halves
+/// away from zero; a floating-point or uncertainty-carrying type keeps the value it already has.
+template<typename T, typename TAcc>
+[[nodiscard]] constexpr T fromAccumulator(const TAcc& value) {
+    if constexpr (std::is_integral_v<T>) {
+        return static_cast<T>(value < TAcc(0) ? value - TAcc(0.5) : value + TAcc(0.5));
+    } else {
+        return static_cast<T>(value);
+    }
+}
+
 template<typename T>
 [[nodiscard]] constexpr T computeCentreOfMass(const DataSet<T>& ds, std::size_t minIndex = 0UZ, std::size_t maxIndex = max_size, std::size_t signalIndex = 0, std::source_location location = std::source_location::current()) {
     maxIndex = detail::checkIndexRange(ds, minIndex, maxIndex, signalIndex, location);
@@ -198,7 +214,8 @@ template<typename T, typename TValue = gr::meta::fundamental_base_value_type_t<T
     const auto lowerMidIndex = midIndex - 1UZ;
     auto       lowerMid      = data.begin() + static_cast<std::ptrdiff_t>(lowerMidIndex);
     std::ranges::nth_element(data.begin(), lowerMid, mid);
-    return static_cast<T>(0.5) * (data.at(lowerMidIndex) + data.at(midIndex));
+    using TAcc = PromotedAccumulator<T>;
+    return fromAccumulator<T>(static_cast<TAcc>(0.5) * (static_cast<TAcc>(data.at(lowerMidIndex)) + static_cast<TAcc>(data.at(midIndex))));
 }
 
 template<typename T>
@@ -263,19 +280,21 @@ template<typename T>
         return T(0);
     }
 
-    auto idxRange = std::views::iota(start, stop - 1);
-    T    integral = std::transform_reduce(std::ranges::begin(idxRange), std::ranges::end(idxRange), T(0), std::plus<>{}, //
-           [&](std::size_t i) -> T {
-            T x0 = getIndexValue(dataSet, dim::X, i, signalIndex);
-            T x1 = getIndexValue(dataSet, dim::X, i + 1, signalIndex);
-            T y0 = getIndexValue(dataSet, dim::Y, i, signalIndex);
-            T y1 = getIndexValue(dataSet, dim::Y, i + 1, signalIndex);
+    using TAcc = PromotedAccumulator<T>;
 
-            T area = T(0.5) * (x1 - x0) * (y0 + y1);
-            return gr::math::isfinite(area) ? area : T(0);
+    auto idxRange = std::views::iota(start, stop - 1);
+    TAcc integral = std::transform_reduce(std::ranges::begin(idxRange), std::ranges::end(idxRange), TAcc(0), std::plus<>{}, //
+        [&](std::size_t i) -> TAcc {
+            TAcc x0 = static_cast<TAcc>(getIndexValue(dataSet, dim::X, i, signalIndex));
+            TAcc x1 = static_cast<TAcc>(getIndexValue(dataSet, dim::X, i + 1, signalIndex));
+            TAcc y0 = static_cast<TAcc>(getIndexValue(dataSet, dim::Y, i, signalIndex));
+            TAcc y1 = static_cast<TAcc>(getIndexValue(dataSet, dim::Y, i + 1, signalIndex));
+
+            TAcc area = TAcc(0.5) * (x1 - x0) * (y0 + y1);
+            return gr::math::isfinite(area) ? area : TAcc(0);
         });
 
-    return static_cast<T>(sign_ * integral);
+    return fromAccumulator<T>(static_cast<TAcc>(sign_) * integral);
 }
 
 template<typename T, typename TValue = gr::meta::fundamental_base_value_type_t<T>>

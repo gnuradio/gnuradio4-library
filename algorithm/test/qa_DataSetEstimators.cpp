@@ -237,6 +237,37 @@ const boost::ut::suite<"DataSet<T> estimator"> _qaDataSetEstimators = [] {
     } | std::tuple<float, double, gr::UncertainValue<float>, gr::UncertainValue<double>>{};
     ;
 
+    // the half that a median or a trapezoid takes lives in the accumulator, so an integral sample type keeps it up to the return
+    "median and integral of an integral sample type"_test = [] {
+        static_assert(std::is_same_v<estimators::PromotedAccumulator<int>, double>);
+        static_assert(std::is_same_v<estimators::PromotedAccumulator<float>, float>);
+        static_assert(std::is_same_v<estimators::PromotedAccumulator<gr::UncertainValue<float>>, gr::UncertainValue<float>>);
+
+        const gr::DataSet<int> odd = generate::from<int>("int odd", std::vector<int>{1, 5, 2});
+        expect(eq(estimators::getMedian(odd), 2)) << std::format("median of an odd count: {}", estimators::getMedian(odd));
+
+        const gr::DataSet<int> even = generate::from<int>("int even", std::vector<int>{1, 2, 4, 10});
+        expect(eq(estimators::getMedian(even), 3)) << std::format("median of an even count: {}", estimators::getMedian(even));
+
+        const gr::DataSet<int> half = generate::from<int>("int half", std::vector<int>{1, 2, 3, 4});
+        expect(eq(estimators::getMedian(half), 3)) << "a median of 2.5 takes the nearest sample value, away from zero";
+
+        const gr::DataSet<int> negative = generate::from<int>("int negative", std::vector<int>{-4, -3, -2, -1});
+        expect(eq(estimators::getMedian(negative), -3)) << "a median of -2.5 takes the nearest sample value, away from zero";
+
+        const gr::DataSet<unsigned> unsignedEven = generate::from<unsigned>("unsigned even", std::vector<unsigned>{10U, 20U, 30U, 40U});
+        expect(eq(estimators::getMedian(unsignedEven), 25U)) << std::format("median of an unsigned even count: {}", estimators::getMedian(unsignedEven));
+
+        const gr::DataSet<int> ramp = generate::from<int>("int ramp", std::vector<int>{0, 2, 4, 6});
+        expect(eq(estimators::getIntegral(ramp), 9)) << std::format("trapezoids of 1, 3 and 5 over a unit index axis: {}", estimators::getIntegral(ramp));
+
+        const gr::DataSet<int> halfRamp = generate::from<int>("int half ramp", std::vector<int>{0, 1, 2, 3});
+        expect(eq(estimators::getIntegral(halfRamp), 5)) << "an integral of 4.5 takes the nearest sample value, away from zero";
+
+        const gr::DataSet<unsigned> unsignedRamp = generate::from<unsigned>("unsigned ramp", std::vector<unsigned>{1U, 2U, 3U});
+        expect(eq(estimators::getIntegral(unsignedRamp), 4U)) << std::format("trapezoids of 1.5 and 2.5 over a unit index axis: {}", estimators::getIntegral(unsignedRamp));
+    };
+
     // a large DC offset must not swamp the sample spread: a 1 V sine riding on 1e6, accumulated in float
     "mean and standard deviation with a large offset"_test = [] {
         constexpr std::size_t nPoints   = 100000UZ;
