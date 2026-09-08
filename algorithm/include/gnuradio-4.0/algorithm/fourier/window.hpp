@@ -32,9 +32,10 @@ namespace gr::algorithm::window {
  * Implementation of window function (also known as an apodization function or tapering function).
  * See Wikipedia for more info: https://en.wikipedia.org/wiki/Window_function
  */
-enum class Type : int { None, Rectangular, Hamming, Hann, Blackman, Nuttall, BlackmanHarris, BlackmanNuttall, FlatTop, Exponential, Kaiser };
+// HannExp names the Hann window and holds its ordinal, so that a setting stored under that name still resolves and the enumerators after it keep their values.
+enum class Type : int { None, Rectangular, Hamming, Hann, HannExp [[deprecated("HannExp is the Hann window")]], Blackman, Nuttall, BlackmanHarris, BlackmanNuttall, FlatTop, Exponential, Kaiser };
 using enum Type;
-inline static constexpr gr::meta::fixed_string TypeNames = "[None, Rectangular, Hamming, Hann, Blackman, Nuttall, BlackmanHarris, BlackmanNuttall, FlatTop, Exponential, Kaiser]";
+inline static constexpr gr::meta::fixed_string TypeNames = "[None, Rectangular, Hamming, Hann, HannExp, Blackman, Nuttall, BlackmanHarris, BlackmanNuttall, FlatTop, Exponential, Kaiser]";
 
 namespace detail {
 template<typename T>
@@ -94,6 +95,14 @@ void create(ContainerType& container, Type windowFunction, const T beta = static
         std::ranges::transform(std::views::iota(0UL, n), container.begin(), [a](const auto i) { return static_cast<T>(0.53836) - static_cast<T>(0.46164) * std::cos(a * static_cast<T>(i)); });
         return;
     }
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+    case HannExp:
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
     case Hann: {
         // formula: w(n) = 0.5 - 0.5 * cos((2 * pi * n) / (N - 1))
         // reference: von Hann, J. (1901). Über den Durchgang einer elektrischen Welle längs der Erdoberfläche. Elektrische Nachrichtentechnik, 17, 421-424.
