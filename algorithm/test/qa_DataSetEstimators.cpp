@@ -255,6 +255,17 @@ const boost::ut::suite<"DataSet<T> estimator"> _qaDataSetEstimators = [] {
         expect(eq(estimators::getRms(ds), estimators::getStdDev(ds))) << "getRms delegates to getStdDev";
     };
 
+    // an integral sample type is accumulated above itself, so neither the running division nor a descending unsigned update loses the answer
+    "mean and standard deviation of an integral sample type"_test = [] {
+        const gr::DataSet<int> ascending = generate::from<int>("int ascending", std::vector<int>{1, 2, 3});
+        expect(eq(estimators::getMean(ascending), 2)) << std::format("mean: {}", estimators::getMean(ascending));
+        expect(eq(estimators::getStdDev(ascending), 0)) << std::format("standard deviation: {}", estimators::getStdDev(ascending));
+
+        const gr::DataSet<unsigned> descending = generate::from<unsigned>("unsigned descending", std::vector<unsigned>{30U, 20U, 10U});
+        expect(eq(estimators::getMean(descending), 20U)) << std::format("mean: {}", estimators::getMean(descending));
+        expect(eq(estimators::getStdDev(descending), 8U)) << std::format("standard deviation: {}", estimators::getStdDev(descending));
+    };
+
     "getDutyCycle"_test = []<typename T = double> {
         using value_t         = gr::meta::fundamental_base_value_type_t<T>;
         std::vector<T> localY = {0, 0, 0, 1, 1, 1}; // simple data set with 0,0,0,1,1,1 => 50% high

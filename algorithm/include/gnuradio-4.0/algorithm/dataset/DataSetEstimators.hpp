@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include <format>
@@ -33,6 +34,11 @@ struct Point {
 };
 
 namespace estimators {
+
+/// @brief accumulator for the Welford updates: an integral sample type is promoted to double so that the per-sample division keeps the fractional part the update carries forward.
+template<typename T>
+using WelfordAccumulator = std::conditional_t<std::is_integral_v<T>, double, T>;
+
 template<typename T>
 [[nodiscard]] constexpr T computeCentreOfMass(const DataSet<T>& ds, std::size_t minIndex = 0UZ, std::size_t maxIndex = max_size, std::size_t signalIndex = 0, std::source_location location = std::source_location::current()) {
     maxIndex = detail::checkIndexRange(ds, minIndex, maxIndex, signalIndex, location);
@@ -156,15 +162,17 @@ template<typename T, typename TValue = gr::meta::fundamental_base_value_type_t<T
     auto signalRange  = dataSet.signalValues(signalIndex) | std::views::drop(indexMin) | std::views::take(indexMax - indexMin);
     auto finiteValues = signalRange | std::views::filter(gr::math::isfinite<T>);
 
-    T count = 0;
-    T mean  = 0;
+    using TAcc = WelfordAccumulator<T>;
+
+    TAcc count = 0;
+    TAcc mean  = 0;
     // Welford: the working values stay at the scale of the deviations, so a large offset cannot swamp the sample spread
     for (const auto& val : finiteValues) {
-        count += T(1);
-        mean += (val - mean) / count;
+        count += TAcc(1);
+        mean += (static_cast<TAcc>(val) - mean) / count;
     }
 
-    return count > T(0) ? mean : std::numeric_limits<TValue>::quiet_NaN();
+    return count > TAcc(0) ? static_cast<T>(mean) : std::numeric_limits<TValue>::quiet_NaN();
 }
 
 template<typename T, typename TValue = gr::meta::fundamental_base_value_type_t<T>>
@@ -216,21 +224,24 @@ template<typename T>
     auto signalRange  = dataSet.signalValues(signalIndex) | std::views::drop(indexMin) | std::views::take(indexMax - indexMin);
     auto finiteValues = signalRange | std::views::filter(gr::math::isfinite<T>);
 
-    T count = 0;
-    T mean  = 0;
-    T m2    = 0;
+    using TAcc = WelfordAccumulator<T>;
+
+    TAcc count = 0;
+    TAcc mean  = 0;
+    TAcc m2    = 0;
     for (const auto& val : finiteValues) {
-        count += T(1);
-        const T delta = val - mean;
+        count += TAcc(1);
+        const TAcc sample = static_cast<TAcc>(val);
+        const TAcc delta  = sample - mean;
         mean += delta / count;
-        m2 += delta * (val - mean);
+        m2 += delta * (sample - mean);
     }
 
-    if (!(count > T(0))) {
+    if (!(count > TAcc(0))) {
         return T(0);
     }
-    const T variance = m2 / count;
-    return variance > T(0) ? gr::math::sqrt(variance) : T(0);
+    const TAcc variance = m2 / count;
+    return variance > TAcc(0) ? static_cast<T>(gr::math::sqrt(variance)) : T(0);
 }
 
 /// @brief The standard deviation, i.e. the RMS of the mean-subtracted signal, despite the name.
