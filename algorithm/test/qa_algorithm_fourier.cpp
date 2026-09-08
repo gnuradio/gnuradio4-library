@@ -3,6 +3,7 @@
 #include <format>
 #include <numbers>
 #include <numeric>
+#include <type_traits>
 
 #include <boost/ut.hpp>
 
@@ -238,6 +239,30 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
             }
         }
     } | AllTypesToTest{};
+
+    // the two-argument overload hands back the caller's own buffer for an lvalue output and an owning container for an rvalue output
+    "compute output ownership"_test = [] {
+        using Cplx                               = std::complex<double>;
+        constexpr std::size_t          N         = 8UZ;
+        constexpr double               tolerance = 1.e-12;
+        gr::algorithm::FFT<Cplx, Cplx> fftAlgo{};
+
+        const std::vector<Cplx> signal(N, Cplx(1., 0.));
+        std::vector<Cplx>       output(N);
+
+        static_assert(std::is_lvalue_reference_v<decltype(fftAlgo.compute(signal, output))>);
+        static_assert(!std::is_reference_v<decltype(fftAlgo.compute(signal, std::vector<Cplx>(N)))>);
+
+        const auto& borrowed = fftAlgo.compute(signal, output);
+        expect(&borrowed == &output) << "an lvalue output is returned by reference";
+
+        const auto& owned = fftAlgo.compute(signal, std::vector<Cplx>(N));
+        expect(eq(owned.size(), N)) << "an rvalue output survives the call expression";
+        expect(approx(owned[0].real(), static_cast<double>(N), tolerance)) << "DC bin of a constant input";
+        for (std::size_t k = 1UZ; k < N; ++k) {
+            expect(approx(std::abs(owned[k]), 0., tolerance)) << std::format("bin {} of a constant input", k);
+        }
+    };
 
     // amplitude scaling: 1/N over the full spectrum, 2/N over the half spectrum except at DC and Nyquist
     "magnitude spectrum scaling"_test = []<typename TVal>() {

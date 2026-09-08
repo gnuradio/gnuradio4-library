@@ -8,6 +8,7 @@
 #include <numbers>
 #include <ranges>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -128,43 +129,14 @@ struct FFT {
         precomputeBitReversal();
     }
 
-    // returns 'out' itself: an lvalue reference for an lvalue argument, an xvalue for an rvalue argument that the caller must consume immediately
+    // returns 'out' itself: a reference to an lvalue argument, the moved container by value for an rvalue argument
     decltype(auto) compute(const std::ranges::input_range auto& in, std::ranges::output_range<TOutput> auto&& out) {
-        if constexpr (requires { out.resize(in.size()); }) {
-            if (out.size() != in.size()) {
-                out.resize(in.size());
-            }
-        }
-
-        const auto size = in.size();
-        if (size == 0) {
-            return std::forward<decltype(out)>(out);
-        }
-
-        selectPlan(size);
-
-        if (useSimdFFT && SimdFFT<ValueType, kTransform>::canProcessSize(size, Order::Ordered) && trySimdFFT(in, out)) { // use SimdFFT if enabled and size is supported
-            return std::forward<decltype(out)>(out);
-        }
-
-        // fallback to original implementation
-        std::ranges::transform(in, out.begin(), [](auto v) {
-            if constexpr (std::floating_point<TInput>) {
-                return TOutput(ValueType(v), 0);
-            } else {
-                return static_cast<TOutput>(v);
-            }
-        });
-
-        if (std::has_single_bit(size)) {
-            ensureRadix2Tables();
-            transformRadix2(out);
+        computeInto(in, out);
+        if constexpr (std::is_lvalue_reference_v<decltype(out)>) {
+            return (out);
         } else {
-            ensureBluesteinTable(size);
-            transformBluestein(out);
+            return std::remove_cvref_t<decltype(out)>(std::move(out));
         }
-
-        return std::forward<decltype(out)>(out);
     }
 
     auto compute(const std::ranges::input_range auto& in) {
@@ -186,6 +158,42 @@ struct FFT {
     }
 
 private:
+    void computeInto(const std::ranges::input_range auto& in, std::ranges::output_range<TOutput> auto& out) {
+        if constexpr (requires { out.resize(in.size()); }) {
+            if (out.size() != in.size()) {
+                out.resize(in.size());
+            }
+        }
+
+        const auto size = in.size();
+        if (size == 0) {
+            return;
+        }
+
+        selectPlan(size);
+
+        if (useSimdFFT && SimdFFT<ValueType, kTransform>::canProcessSize(size, Order::Ordered) && trySimdFFT(in, out)) { // use SimdFFT if enabled and size is supported
+            return;
+        }
+
+        // fallback to original implementation
+        std::ranges::transform(in, out.begin(), [](auto v) {
+            if constexpr (std::floating_point<TInput>) {
+                return TOutput(ValueType(v), 0);
+            } else {
+                return static_cast<TOutput>(v);
+            }
+        });
+
+        if (std::has_single_bit(size)) {
+            ensureRadix2Tables();
+            transformRadix2(out);
+        } else {
+            ensureBluesteinTable(size);
+            transformBluestein(out);
+        }
+    }
+
     bool trySimdFFT_C2C(const auto& in, auto&& out, std::size_t N) {
         using InputValueType        = typename std::remove_cvref_t<decltype(in)>::value_type::value_type;
         const std::size_t nElements = 2UZ * N;
