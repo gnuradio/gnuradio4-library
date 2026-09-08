@@ -3,6 +3,7 @@
 #include <format>
 #include <numbers>
 #include <numeric>
+#include <string_view>
 #include <type_traits>
 
 #include <boost/ut.hpp>
@@ -390,11 +391,21 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
         }
     } | std::tuple<float, double>();
 
+    // a setting stored as HannExp still names a window, and the window it names is Hann
+    "HannExp names the Hann window"_test = []<typename T>() {
+        const auto parsed = magic_enum::enum_cast<gr::algorithm::window::Type>("HannExp");
+        expect(parsed.has_value()) << "HannExp resolves to a window";
+        expect(magic_enum::enum_name(parsed.value()) == std::string_view{"HannExp"}) << "the name round-trips through the enum";
+
+        for (const std::size_t n : {2UZ, 9UZ, 64UZ, 1023UZ}) {
+            const auto aliased = create<T>(parsed.value(), n);
+            const auto hann    = create<T>(gr::algorithm::window::Type::Hann, n);
+            expect(std::ranges::equal(aliased, hann)) << std::format("<{}> n={} HannExp coefficients equal Hann", type_name<T>(), n);
+        }
+    } | std::tuple<float, double>();
+
     "window corner cases"_test = []<typename T>() {
         static_assert(not magic_enum::enum_cast<gr::algorithm::window::Type>("UnknownWindow", magic_enum::case_insensitive).has_value());
-        // Hann has a single spelling in this set. The name below evaluated sin^2 over two periods across
-        // its own span, which is zero at the center and peaks a bin off DC in the transform.
-        static_assert(not magic_enum::enum_cast<gr::algorithm::window::Type>("HannExp", magic_enum::case_insensitive).has_value());
         expect(throws<std::invalid_argument>([] { std::ignore = create(gr::algorithm::window::Type::Kaiser, 1); })) << "invalid Kaiser window size";
         expect(throws<std::invalid_argument>([] { std::ignore = create(gr::algorithm::window::Type::Kaiser, 2, -1.f); })) << "invalid Kaiser window beta";
     } | std::tuple<float, double>();
