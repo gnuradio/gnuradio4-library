@@ -3,7 +3,7 @@
 
 #include <gnuradio-4.0/DataSet.hpp>
 #include <gnuradio-4.0/Message.hpp>
-#include <gnuradio-4.0/meta/UncertainValue.hpp>
+#include <gnuradio-4.0/algorithm/math/UncertainValue.hpp>
 
 #include "DataSetHelper.hpp"
 
