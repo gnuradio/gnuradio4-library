@@ -6,8 +6,8 @@ install(TARGETS gnuradio-algorithm EXPORT ${GR4_EXPORT_NAME})
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/gnuradio-4.0/algorithm"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/gnuradio-4.0")
 
-# gnuradio-core carries MemoryAllocators/Message/HistoryBuffer/SVD/Tensor/DataSet, which the public headers of this
-# target include directly
+# gnuradio-core carries MemoryAllocators/Message/HistoryBuffer/Tensor/DataSet, which the public headers of this target
+# include directly
 target_link_libraries(
   gnuradio-algorithm
   INTERFACE gnuradio4::gnuradio-options
