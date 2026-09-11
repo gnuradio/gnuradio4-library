@@ -25,6 +25,7 @@ The public C++23 library is currently header-oriented and includes:
 - Fourier transforms and window functions, including SIMD FFT support
 - random-number, Gaussian-noise, tone, noise, and signal generators
 - filtering utilities, including Savitzky-Golay and SVD filters
+- tensor arithmetic, dense linear algebra, and singular value decomposition
 - data-set estimation, mathematics, and transformation helpers
 - file I/O helpers for native and Emscripten builds
 - burst tapering, sample-rate estimation, and Schmitt-trigger utilities
@@ -77,8 +78,9 @@ find_package(gnuradio4Library CONFIG REQUIRED)
 target_link_libraries(my_target PRIVATE gnuradio4::gnuradio-algorithm)
 ```
 
-The source tree uses the compatibility target name `gnuradio-algorithm`; the
-public C++ API is in the `gr::algorithm` namespace.
+The source tree uses the compatibility target name `gnuradio-algorithm`. Most
+public C++ APIs are in the `gr::algorithm` namespace; established APIs such as
+tensor mathematics retain their `gr::math` namespace.
 
 ## SDK Images
 
