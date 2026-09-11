@@ -29,7 +29,7 @@
 #include <gnuradio-4.0/HistoryBuffer.hpp>
 #include <gnuradio-4.0/Message.hpp>
 #include <gnuradio-4.0/algorithm/fourier/window.hpp>
-#include <gnuradio-4.0/meta/UncertainValue.hpp>
+#include <gnuradio-4.0/algorithm/math/UncertainValue.hpp>
 #include <gnuradio-4.0/meta/formatter.hpp>
 
 // this mocks the execution policy until Emscripten's libc++ does support this (Clang already does)

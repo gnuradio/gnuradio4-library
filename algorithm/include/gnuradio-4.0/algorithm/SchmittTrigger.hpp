@@ -6,7 +6,7 @@
 
 #include <gnuradio-4.0/HistoryBuffer.hpp>
 #include <gnuradio-4.0/algorithm/filter/SavitzkyGolay.hpp>
-#include <gnuradio-4.0/meta/UncertainValue.hpp>
+#include <gnuradio-4.0/algorithm/math/UncertainValue.hpp>
 
 namespace gr::trigger {
 

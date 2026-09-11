@@ -10,6 +10,7 @@
 
 #include <gnuradio-4.0/algorithm/ImChart.hpp>
 #include <gnuradio-4.0/algorithm/filter/FilterTool.hpp>
+#include <gnuradio-4.0/algorithm/math/UncertainValueFormatter.hpp>
 #include <gnuradio-4.0/meta/UnitTestHelper.hpp>
 #include <gnuradio-4.0/meta/formatter.hpp>
 

@@ -212,6 +212,9 @@ if(ENABLE_TESTING
       qa_ToneGenerator
       qa_SignalGeneratorCore
       qa_algorithm_fourier
+      qa_UncertainValue
+      qa_UncertainValueFormatter
+      qa_UncertainValueCompatibility
       qa_DataSetEstimators
       qa_FilterTool
       qa_ImCanvas

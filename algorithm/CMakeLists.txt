@@ -5,6 +5,8 @@ target_include_directories(gnuradio-algorithm INTERFACE $<BUILD_INTERFACE:${CMAK
 install(TARGETS gnuradio-algorithm EXPORT ${GR4_EXPORT_NAME})
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/gnuradio-4.0/algorithm"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/gnuradio-4.0")
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/include/gnuradio-4.0/meta/UncertainValue.hpp"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/gnuradio-4.0/meta")
 
 # gnuradio-core carries MemoryAllocators/Message/HistoryBuffer/SVD/Tensor/DataSet, which the public headers of this
 # target include directly
