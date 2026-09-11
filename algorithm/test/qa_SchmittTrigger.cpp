@@ -6,7 +6,7 @@
 #include "gnuradio-4.0/Tag.hpp"
 #include <gnuradio-4.0/Tensor.hpp>
 #include <gnuradio-4.0/algorithm/SchmittTrigger.hpp>
-#include <gnuradio-4.0/meta/UncertainValue.hpp>
+#include <gnuradio-4.0/algorithm/math/UncertainValueFormatter.hpp>
 #include <gnuradio-4.0/meta/formatter.hpp>
 
 using namespace boost::ut;

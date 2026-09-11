@@ -27,6 +27,7 @@ The public C++23 library is currently header-oriented and includes:
 - filtering utilities, including Savitzky-Golay and SVD filters
 - tensor arithmetic, dense linear algebra, and singular value decomposition
 - data-set estimation, mathematics, and transformation helpers
+- uncertainty-aware numeric values and propagated mathematical operations
 - file I/O helpers for native and Emscripten builds
 - burst tapering, sample-rate estimation, and Schmitt-trigger utilities
 - plotting data models for canvases, charts, and graphs
