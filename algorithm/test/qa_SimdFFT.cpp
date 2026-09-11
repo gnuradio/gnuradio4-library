@@ -440,4 +440,125 @@ boost::ut::suite<"SimdFFT Comprehensive"> _ = [] {
     } | std::tuple{float{} /*, double{}*/};
 };
 
+/// the reference spectrum of a real signal, both accumulated in double: bins 0 to N/2 of the unnormalized forward
+/// DFT, sum x[i] exp(-2 pi i k / N), which is the convention every SimdFFT direction is unnormalized against
+struct RealDftReference {
+    std::vector<double>               signal{};
+    std::vector<std::complex<double>> spectrum{};
+};
+
+RealDftReference realDftReference(std::size_t n) {
+    RealDftReference reference;
+    reference.signal.resize(n);
+    for (std::size_t i = 0UZ; i < n; ++i) {
+        const double t      = static_cast<double>(i) / static_cast<double>(n);
+        reference.signal[i] = std::sin(2. * std::numbers::pi * 3. * t) + 0.5 * std::cos(2. * std::numbers::pi * 17. * t + 0.3) - 0.25 * std::sin(2. * std::numbers::pi * 41. * t);
+    }
+
+    std::vector<double> cosTable(n);
+    std::vector<double> sinTable(n);
+    for (std::size_t j = 0UZ; j < n; ++j) {
+        const double angle = -2. * std::numbers::pi * static_cast<double>(j) / static_cast<double>(n);
+        cosTable[j]        = std::cos(angle);
+        sinTable[j]        = std::sin(angle);
+    }
+
+    reference.spectrum.resize(n / 2UZ + 1UZ);
+    for (std::size_t k = 0UZ; k < reference.spectrum.size(); ++k) {
+        double re = 0.;
+        double im = 0.;
+        for (std::size_t i = 0UZ; i < n; ++i) {
+            const std::size_t j = (i * k) % n; // the angle index, kept exact rather than accumulated
+            re += reference.signal[i] * cosTable[j];
+            im += reference.signal[i] * sinTable[j];
+        }
+        reference.spectrum[k] = {re, im};
+    }
+    return reference;
+}
+
+/// One length of the real transform against that direct DFT. Each direction is checked against the reference and not
+/// through the other: the forward one bin by bin against the reference spectrum, the backward one against N times the
+/// signal that spectrum was taken from, so a pair of errors that cancel in a round trip is still a failure here.
+template<std::floating_point T>
+void checkRealAgainstDft(std::size_t n, const RealDftReference& reference) {
+    using namespace boost::ut;
+    using namespace gr::algorithm;
+
+    const char* typeName = std::is_same_v<T, float> ? "float" : "double";
+    if (!SimdFFT<T, Transform::Real>::canProcessSize(n, Order::Ordered)) {
+        std::println("N = {:5} {:<6}: skipped, SimdFFT does not accept the length", n, typeName);
+        return;
+    }
+    const double tolerance = std::is_same_v<T, float> ? 1e-4 : 1e-9;
+
+    std::vector<T, gr::allocator::Aligned<T>> input(n);
+    std::vector<T, gr::allocator::Aligned<T>> output(n);
+    for (std::size_t i = 0UZ; i < n; ++i) {
+        input[i] = static_cast<T>(reference.signal[i]);
+    }
+
+    SimdFFT<T, Transform::Real> plan(n);
+    plan.template transform<Direction::Forward, Order::Ordered>(input, output);
+
+    // the ordered real layout: [0] the DC bin, [1] the Nyquist bin, ([2k], [2k+1]) the k-th bin
+    double     numerator   = 0.;
+    double     denominator = 0.;
+    const auto accumulate  = [&numerator, &denominator](double re, double im, std::complex<double> want) {
+        numerator += (re - want.real()) * (re - want.real()) + (im - want.imag()) * (im - want.imag());
+        denominator += std::norm(want);
+    };
+    accumulate(static_cast<double>(output[0]), 0., reference.spectrum[0]);
+    accumulate(static_cast<double>(output[1]), 0., reference.spectrum[n / 2UZ]);
+    for (std::size_t k = 1UZ; k < n / 2UZ; ++k) {
+        accumulate(static_cast<double>(output[2UZ * k]), static_cast<double>(output[2UZ * k + 1UZ]), reference.spectrum[k]);
+    }
+    const double forwardError = std::sqrt(numerator / denominator);
+
+    std::vector<T, gr::allocator::Aligned<T>> spectrum(n);
+    std::vector<T, gr::allocator::Aligned<T>> reconstructed(n);
+    spectrum[0] = static_cast<T>(reference.spectrum[0].real());
+    spectrum[1] = static_cast<T>(reference.spectrum[n / 2UZ].real());
+    for (std::size_t k = 1UZ; k < n / 2UZ; ++k) {
+        spectrum[2UZ * k]       = static_cast<T>(reference.spectrum[k].real());
+        spectrum[2UZ * k + 1UZ] = static_cast<T>(reference.spectrum[k].imag());
+    }
+    plan.template transform<Direction::Backward, Order::Ordered>(spectrum, reconstructed);
+
+    numerator   = 0.;
+    denominator = 0.;
+    for (std::size_t i = 0UZ; i < n; ++i) {
+        const double want = static_cast<double>(n) * reference.signal[i]; // the transforms are unnormalized
+        const double got  = static_cast<double>(reconstructed[i]);
+        numerator += (got - want) * (got - want);
+        denominator += want * want;
+    }
+    const double backwardError = std::sqrt(numerator / denominator);
+
+    std::println("N = {:5} {:<6}: forward {:.3e}, backward {:.3e}", n, typeName, forwardError, backwardError);
+    expect(lt(forwardError, tolerance)) << std::format("N = {} <{}> forward relative error {:.3e}", n, typeName, forwardError);
+    expect(lt(backwardError, tolerance)) << std::format("N = {} <{}> backward relative error {:.3e}", n, typeName, backwardError);
+}
+
+/// The lengths whose factorization reaches the real radix-3 and radix-5 kernels, against the powers of two as a control
+boost::ut::suite<"SimdFFT real against a direct DFT"> _realVsDirectDft = [] {
+    using namespace boost::ut;
+
+    "lengths with a factor 3 or 5"_test = [] {
+        for (const std::size_t n : {96UZ, 120UZ, 160UZ, 192UZ, 240UZ, 288UZ, 320UZ, 400UZ, 480UZ, 640UZ, 800UZ, 960UZ, 1600UZ, 2400UZ, 3200UZ, 4000UZ}) {
+            const RealDftReference reference = realDftReference(n);
+            checkRealAgainstDft<float>(n, reference);
+            checkRealAgainstDft<double>(n, reference);
+        }
+    };
+
+    "powers of two, the control"_test = [] {
+        for (const std::size_t n : {32UZ, 64UZ, 128UZ, 256UZ, 512UZ, 1024UZ, 2048UZ}) {
+            const RealDftReference reference = realDftReference(n);
+            checkRealAgainstDft<float>(n, reference);
+            checkRealAgainstDft<double>(n, reference);
+        }
+    };
+};
+
 int main() { /* tests are auto-registered */ }

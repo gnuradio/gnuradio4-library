@@ -1307,9 +1307,10 @@ static NEVER_INLINE(void) realRadix3(std::size_t stride, std::size_t nGroups, st
     using V                 = vec<T, 4>;
     constexpr std::size_t L = V::size();
 
-    constexpr T sign   = dir == Direction::Forward ? T{1} : T{-1};
     constexpr T cos120 = T{-0.5};
-    constexpr T sin120 = T{0.5} * std::numbers::sqrt3_v<T> * sign;
+    // both directions carry +sin(2pi/3): the inverse butterfly is the transpose of the forward one, so it differs in
+    // the order it combines the terms and not in the sign of the rotation (FFTPACK RADF3 and RADB3 share +TAUI)
+    constexpr T sin120 = T{0.5} * std::numbers::sqrt3_v<T>;
 
     assert(isAligned<64>(input.data()));
     assert(isAligned<64>(output.data()));
@@ -1733,10 +1734,9 @@ static NEVER_INLINE(void) realRadix5(std::size_t stride, std::size_t nGroups, st
         }
 
         // pass 2: general frequencies (0 < i < stride/2) ===
-        const std::size_t strideP2 = stride + 2;
         for (std::size_t k = 0; k < nGroups; ++k) {
             for (std::size_t i = 2; i < stride; i += 2) {
-                const std::size_t ic = strideP2 - i - 1; // Conjugate index
+                const std::size_t ic = stride - i; // conjugate index for Hermitian symmetry, as in realRadix3
 
                 // load first input (no twiddle)
                 V re0(pInput + (i - 1 + (k + 0 * nGroups) * stride) * L, stdx::vector_aligned);
@@ -1759,42 +1759,42 @@ static NEVER_INLINE(void) realRadix5(std::size_t stride, std::size_t nGroups, st
                 V im4(pInput + (i + (k + 4 * nGroups) * stride) * L, stdx::vector_aligned);
                 applyTwiddle(re4, im4, V(pTwiddle4[i - 2]), V(pTwiddle4[i - 1]));
 
-                // 5-point butterfly with conjugate pairs
-                V sumRe_14   = re1 + re4;
-                V diffRe_14  = re4 - re1;
-                V crossRe_14 = im1 - im4;
-                V sumIm_14   = im1 + im4;
+                // 5-point butterfly over the two conjugate pairs: inputs 1 & 4 and inputs 2 & 3
+                V sumRe_14  = re1 + re4;
+                V sumIm_14  = im1 + im4;
+                V diffRe_14 = re4 - re1;
+                V diffIm_14 = im1 - im4;
 
-                V sumRe_23   = re2 + re3;
-                V diffRe_23  = re3 - re2;
-                V crossRe_23 = im2 - im3;
-                V sumIm_23   = im2 + im3;
+                V sumRe_23  = re2 + re3;
+                V sumIm_23  = im2 + im3;
+                V diffRe_23 = re3 - re2;
+                V diffIm_23 = im2 - im3;
 
                 // output[0] - DC-like (sum with conjugate symmetry)
                 store_unchecked(re0 + (sumRe_14 + sumRe_23), pOutput + (i - 1 + (5 * k + 0) * stride) * L, stdx::vector_aligned);
-                store_unchecked(im0 - (sumIm_14 + sumIm_23), pOutput + (i + (5 * k + 0) * stride) * L, stdx::vector_aligned);
+                store_unchecked(im0 + (sumIm_14 + sumIm_23), pOutput + (i + (5 * k + 0) * stride) * L, stdx::vector_aligned);
 
                 // apply 72° and 144° rotations
                 V rot72Re  = re0 + (cos72 * sumRe_14 + cos144 * sumRe_23);
-                V rot72Im  = im0 - (cos72 * sumIm_14 + cos144 * sumIm_23);
+                V rot72Im  = im0 + (cos72 * sumIm_14 + cos144 * sumIm_23);
                 V rot144Re = re0 + (cos144 * sumRe_14 + cos72 * sumRe_23);
-                V rot144Im = im0 - (cos144 * sumIm_14 + cos72 * sumIm_23);
+                V rot144Im = im0 + (cos144 * sumIm_14 + cos72 * sumIm_23);
 
-                V cross72Re  = sin72 * crossRe_14 + sin144 * crossRe_23;
+                V cross72Re  = sin72 * diffIm_14 + sin144 * diffIm_23;
                 V cross72Im  = sin72 * diffRe_14 + sin144 * diffRe_23;
-                V cross144Re = sin144 * crossRe_14 - sin72 * crossRe_23;
+                V cross144Re = sin144 * diffIm_14 - sin72 * diffIm_23;
                 V cross144Im = sin144 * diffRe_14 - sin72 * diffRe_23;
 
-                // store Hermitian-symmetric pairs: X[i] and X[-i]
-                store_unchecked(rot72Re - cross72Re, pOutput + (i - 1 + (5 * k + 2) * stride) * L, stdx::vector_aligned);
-                store_unchecked(rot72Re + cross72Re, pOutput + (ic + (5 * k + 1) * stride) * L, stdx::vector_aligned);
+                // store Hermitian-symmetric pairs: X[i] into blocks 2 and 4, X[-i] mirrored into blocks 1 and 3
+                store_unchecked(rot72Re + cross72Re, pOutput + (i - 1 + (5 * k + 2) * stride) * L, stdx::vector_aligned);
+                store_unchecked(rot72Re - cross72Re, pOutput + (ic - 1 + (5 * k + 1) * stride) * L, stdx::vector_aligned);
                 store_unchecked(rot72Im + cross72Im, pOutput + (i + (5 * k + 2) * stride) * L, stdx::vector_aligned);
-                store_unchecked(cross72Im - rot72Im, pOutput + (ic + 1 + (5 * k + 1) * stride) * L, stdx::vector_aligned);
+                store_unchecked(cross72Im - rot72Im, pOutput + (ic + (5 * k + 1) * stride) * L, stdx::vector_aligned);
 
-                store_unchecked(rot144Re - cross144Re, pOutput + (i - 1 + (5 * k + 4) * stride) * L, stdx::vector_aligned);
-                store_unchecked(rot144Re + cross144Re, pOutput + (ic + (5 * k + 3) * stride) * L, stdx::vector_aligned);
+                store_unchecked(rot144Re + cross144Re, pOutput + (i - 1 + (5 * k + 4) * stride) * L, stdx::vector_aligned);
+                store_unchecked(rot144Re - cross144Re, pOutput + (ic - 1 + (5 * k + 3) * stride) * L, stdx::vector_aligned);
                 store_unchecked(rot144Im + cross144Im, pOutput + (i + (5 * k + 4) * stride) * L, stdx::vector_aligned);
-                store_unchecked(cross144Im - rot144Im, pOutput + (ic + 1 + (5 * k + 3) * stride) * L, stdx::vector_aligned);
+                store_unchecked(cross144Im - rot144Im, pOutput + (ic + (5 * k + 3) * stride) * L, stdx::vector_aligned);
             }
         }
 
@@ -1820,7 +1820,7 @@ static NEVER_INLINE(void) realRadix5(std::size_t stride, std::size_t nGroups, st
             V rot72    = val0 + (cos72 * val1 + cos144 * val3);
             V rot144   = val0 + (cos144 * val1 + cos72 * val3);
             V cross72  = sin72 * val2 + sin144 * val4;
-            V cross144 = sin144 * val2 + sin72 * val4;
+            V cross144 = sin144 * val2 - sin72 * val4; // the 144° rotation subtracts, the 72° one adds (FFTPACK RADB5)
 
             store_unchecked(val0 + (val1 + val3), pOutput + (k + 0 * nGroups) * stride * L, stdx::vector_aligned);
             store_unchecked(rot72 - cross72, pOutput + (k + 1 * nGroups) * stride * L, stdx::vector_aligned);
@@ -1834,60 +1834,57 @@ static NEVER_INLINE(void) realRadix5(std::size_t stride, std::size_t nGroups, st
         }
 
         // pass 2: general frequencies (0 < i < stride/2)
-        const std::size_t strideP2 = stride + 2;
         for (std::size_t k = 0; k < nGroups; ++k) {
             for (std::size_t i = 2; i < stride; i += 2) {
-                const std::size_t ic = strideP2 - i - 1;
+                const std::size_t ic = stride - i; // conjugate index for Hermitian symmetry, as in realRadix3
 
-                // load Hermitian-symmetric input from both X[i] and X[-i]
+                // load X[i] from blocks 0, 2 and 4 and the mirrored X[-i] from blocks 1 and 3
                 V re_pos(pInput + (i - 1 + (5 * k + 0) * stride) * L, stdx::vector_aligned);
                 V im_pos(pInput + (i + (5 * k + 0) * stride) * L, stdx::vector_aligned);
                 V re_i2(pInput + (i - 1 + (5 * k + 2) * stride) * L, stdx::vector_aligned);
                 V im_i2(pInput + (i + (5 * k + 2) * stride) * L, stdx::vector_aligned);
-                V re_neg1(pInput + (ic + (5 * k + 1) * stride) * L, stdx::vector_aligned);
-                V im_neg1(pInput + (ic + 1 + (5 * k + 1) * stride) * L, stdx::vector_aligned);
+                V re_neg1(pInput + (ic - 1 + (5 * k + 1) * stride) * L, stdx::vector_aligned);
+                V im_neg1(pInput + (ic + (5 * k + 1) * stride) * L, stdx::vector_aligned);
                 V re_i4(pInput + (i - 1 + (5 * k + 4) * stride) * L, stdx::vector_aligned);
                 V im_i4(pInput + (i + (5 * k + 4) * stride) * L, stdx::vector_aligned);
-                V re_neg3(pInput + (ic + (5 * k + 3) * stride) * L, stdx::vector_aligned);
-                V im_neg3(pInput + (ic + 1 + (5 * k + 3) * stride) * L, stdx::vector_aligned);
+                V re_neg3(pInput + (ic - 1 + (5 * k + 3) * stride) * L, stdx::vector_aligned);
+                V im_neg3(pInput + (ic + (5 * k + 3) * stride) * L, stdx::vector_aligned);
 
-                // unpack Hermitian pairs
-                V                  sumRe_14  = re_i2 + re_neg1;
-                V                  diffRe_14 = re_i2 - re_neg1;
-                V                  sumRe_23  = re_i4 + re_neg3;
-                V                  diffRe_23 = re_i4 - re_neg3;
-                [[maybe_unused]] V sumIm_14  = im_i2 - re_neg1;
-                [[maybe_unused]] V diffIm_14 = im_i2 + re_neg1;
-                V                  sumIm_23  = im_i4 - re_neg3;
-                [[maybe_unused]] V diffIm_23 = im_i4 + re_neg3;
+                // unpack Hermitian pairs: the mirrored half carries the conjugate, so its imaginary part subtracts
+                V sumRe_14  = re_i2 + re_neg1;
+                V sumIm_14  = im_i2 - im_neg1;
+                V diffRe_14 = re_i2 - re_neg1;
+                V diffIm_14 = im_i2 + im_neg1;
 
-                V crossRe_14 = re_i2 - im_neg1;
-                V crossRe_23 = re_i4 - im_neg3;
+                V sumRe_23  = re_i4 + re_neg3;
+                V sumIm_23  = im_i4 - im_neg3;
+                V diffRe_23 = re_i4 - re_neg3;
+                V diffIm_23 = im_i4 + im_neg3;
 
                 // output[0]
                 store_unchecked(re_pos + (sumRe_14 + sumRe_23), pOutput + (i - 1 + (k + 0 * nGroups) * stride) * L, stdx::vector_aligned);
-                store_unchecked(im_pos + (diffRe_14 + diffRe_23), pOutput + (i + (k + 0 * nGroups) * stride) * L, stdx::vector_aligned);
+                store_unchecked(im_pos + (sumIm_14 + sumIm_23), pOutput + (i + (k + 0 * nGroups) * stride) * L, stdx::vector_aligned);
 
                 // inverse butterfly with rotations
                 V rot72Re  = re_pos + (cos72 * sumRe_14 + cos144 * sumRe_23);
-                V rot72Im  = im_pos + (cos72 * diffRe_14 + cos144 * diffRe_23);
+                V rot72Im  = im_pos + (cos72 * sumIm_14 + cos144 * sumIm_23);
                 V rot144Re = re_pos + (cos144 * sumRe_14 + cos72 * sumRe_23);
-                V rot144Im = im_pos + (cos144 * diffRe_14 + cos72 * diffRe_23);
+                V rot144Im = im_pos + (cos144 * sumIm_14 + cos72 * sumIm_23);
 
-                V cross72Re  = sin72 * crossRe_14 + sin144 * crossRe_23;
-                V cross72Im  = sin72 * sumIm_14 + sin144 * sumIm_23;
-                V cross144Re = sin144 * crossRe_14 - sin72 * crossRe_23;
-                V cross144Im = sin144 * sumIm_14 - sin72 * sumIm_23;
+                V cross72Re  = sin72 * diffRe_14 + sin144 * diffRe_23;
+                V cross72Im  = sin72 * diffIm_14 + sin144 * diffIm_23;
+                V cross144Re = sin144 * diffRe_14 - sin72 * diffRe_23;
+                V cross144Im = sin144 * diffIm_14 - sin72 * diffIm_23;
 
                 // prepare outputs with twiddles
-                V out1Re = rot72Re + cross72Im;
-                V out1Im = rot72Im - cross72Re;
-                V out2Re = rot144Re + cross144Im;
-                V out2Im = rot144Im - cross144Re;
-                V out3Re = rot144Re - cross144Im;
-                V out3Im = rot144Im + cross144Re;
-                V out4Re = rot72Re - cross72Im;
-                V out4Im = rot72Im + cross72Re;
+                V out1Re = rot72Re - cross72Im;
+                V out1Im = rot72Im + cross72Re;
+                V out2Re = rot144Re - cross144Im;
+                V out2Im = rot144Im + cross144Re;
+                V out3Re = rot144Re + cross144Im;
+                V out3Im = rot144Im - cross144Re;
+                V out4Re = rot72Re + cross72Im;
+                V out4Im = rot72Im - cross72Re;
 
                 applyTwiddle(out1Re, out1Im, V(pTwiddle1[i - 2]), V(pTwiddle1[i - 1]));
                 store_unchecked(out1Re, pOutput + (i - 1 + (k + 1 * nGroups) * stride) * L, stdx::vector_aligned);
