@@ -636,6 +636,10 @@ std::vector<std::complex<T>> sortComplexWithConjugates(const std::vector<std::co
 
 } // namespace details
 
+/// @brief expands the roots into the polynomial coefficients of Π(1 - rootᵢ·z⁻¹), narrowed to T on return.
+/// The product is accumulated in double whatever T is: forming a conjugate pair's quadratic {1, -2·Re(p), |p|²}
+/// from a pole already narrowed to T cancels 1 + a₁ + a₂ to zero once the pole sits within an ULP of z = 1
+/// (float, fc/fs = 5e-6), which moves that pole onto the unit circle.
 template<typename T, std::ranges::input_range Range>
 [[nodiscard]] std::vector<T> expandRootsToPolynomial(Range&& roots, std::size_t desiredOrder) { // NOSONAR (S5425) — forwarding-ref kept for non-const-iterable views
     if (roots.empty()) {
@@ -647,11 +651,11 @@ template<typename T, std::ranges::input_range Range>
         return coefficients;
     }
 
-    constexpr T    epsilon      = static_cast<T>(1e-10);
-    std::vector<T> coefficients = {static_cast<T>(1)}; // Starts with "x^0" coefficient (1.0)
+    constexpr double    epsilon      = 1e-10;
+    std::vector<double> coefficients = {1.}; // Starts with "x^0" coefficient (1.0)
 
-    auto convolve = [](const std::vector<T>& a, const std::vector<T>& b) {
-        std::vector<T> result(a.size() + b.size() - 1, static_cast<T>(0));
+    auto convolve = [](const std::vector<double>& a, const std::vector<double>& b) {
+        std::vector<double> result(a.size() + b.size() - 1, 0.);
         for (std::size_t i = 0UZ; i < a.size(); ++i) {
             for (std::size_t j = 0UZ; j < b.size(); ++j) {
                 result[i + j] += a[i] * b[j];
@@ -663,27 +667,56 @@ template<typename T, std::ranges::input_range Range>
     for (size_t i = 0; i < roots.size(); ++i) {
         const auto& root = roots[i];
 
-        if (static_cast<T>(std::abs(root.imag())) > epsilon) { // complex root
+        if (static_cast<double>(std::abs(root.imag())) > epsilon) { // complex root
             if (i + 1 >= roots.size()) {
                 throw std::runtime_error(std::format("Unmatched complex root at i={}: {}", i, root)); // Unpaired complex root.
             }
 
             // ensure the next root is the conjugate pair.
             const auto& next_root = roots[i + 1];
-            if (static_cast<T>(std::abs(root.real() - next_root.real())) > epsilon || static_cast<T>(std::abs(root.imag() + next_root.imag())) > epsilon) {
+            if (static_cast<double>(std::abs(root.real() - next_root.real())) > epsilon || static_cast<double>(std::abs(root.imag() + next_root.imag())) > epsilon) {
                 std::string fmt = "Complex roots {} vs. {} are not conjugate pairs.\nroots:\n{}"; // workaround for missing std::runtime_format (C++26)
                 throw std::runtime_error(std::vformat(fmt, std::make_format_args(root, next_root, roots)));
             }
 
             // use the quadratic factor for the complex root and its conjugate.
-            coefficients = convolve(coefficients, {static_cast<T>(1), -static_cast<T>(2 * root.real()), static_cast<T>(std::norm(root))});
+            coefficients = convolve(coefficients, {1., -2. * static_cast<double>(root.real()), static_cast<double>(std::norm(root))});
             ++i; // skip the next root since it's the conjugate pair.
         } else { // real root
-            coefficients = convolve(coefficients, {static_cast<T>(1), -static_cast<T>(root.real())});
+            coefficients = convolve(coefficients, {1., -static_cast<double>(root.real())});
         }
     }
 
-    return coefficients;
+    std::vector<T> narrowed(coefficients.size());
+    std::ranges::transform(coefficients, narrowed.begin(), [](double coefficient) { return static_cast<T>(coefficient); });
+    return narrowed;
+}
+
+/// @brief true when the stored coefficients of A(z) = a[0] + a[1]·z⁻¹ + … + a[n]·z⁻ⁿ hold a pole on or outside the
+/// unit circle. Three quantities of a monic A are positive-definite while every root is inside: A(1) = Π(1 - pᵢ) > 0,
+/// A(-1) = Π(1 + pᵢ) > 0 and Π|pᵢ| = |a[n]| < 1. For n ≤ 2 the three together are the Jury criterion and decide a
+/// section exactly; for a longer section they are necessary and screen it. They are read from the coefficients as
+/// stored, so the answer is about the poles the stored precision holds, not the poles the design asked for.
+template<typename T>
+[[nodiscard]] inline bool hasPoleOnOrOutsideUnitCircle(const std::vector<T>& polynomial) {
+    if (polynomial.size() < 2UZ) { // a constant denominator has no pole
+        return false;
+    }
+    const double leading = static_cast<double>(polynomial.front());
+    if (leading == 0.) {
+        return true;
+    }
+
+    double atPlusOne  = 0.;
+    double atMinusOne = 0.;
+    for (std::size_t i = 0UZ; i < polynomial.size(); ++i) {
+        const double coefficient = static_cast<double>(polynomial[i]) / leading;
+        atPlusOne += coefficient;
+        atMinusOne += (i % 2UZ == 0UZ) ? coefficient : -coefficient;
+    }
+    const double rootProduct = std::abs(static_cast<double>(polynomial.back()) / leading);
+
+    return atPlusOne <= 0. || atMinusOne <= 0. || rootProduct >= 1.;
 }
 
 /// @brief analog angular corner frequency whose bilinear image is the digital corner @p f.
@@ -912,13 +945,13 @@ requires((maxSectionSize & 1) == 0) // to handle complex conjugate pole-zero pai
         std::vector<FilterCoefficients<T>> sections;
         while (!digitalPoleZeros.poles.empty()) {
             // extract and remove poles from the front
-            const std::size_t            numPoles = static_cast<T>(std::abs(digitalPoleZeros.poles.front().imag())) > static_cast<T>(epsilon) ? std::min(maxSectionSize, digitalPoleZeros.poles.size()) : 1UZ;
-            std::vector<std::complex<T>> sectionPoles(digitalPoleZeros.poles.begin(), digitalPoleZeros.poles.begin() + static_cast<ptrdiff_t>(numPoles));
+            const std::size_t                 numPoles = std::abs(digitalPoleZeros.poles.front().imag()) > epsilon ? std::min(maxSectionSize, digitalPoleZeros.poles.size()) : 1UZ;
+            std::vector<std::complex<double>> sectionPoles(digitalPoleZeros.poles.begin(), digitalPoleZeros.poles.begin() + static_cast<ptrdiff_t>(numPoles));
             digitalPoleZeros.poles.erase(digitalPoleZeros.poles.begin(), digitalPoleZeros.poles.begin() + static_cast<ptrdiff_t>(numPoles));
 
             // extract and remove zeros from the front
-            const std::size_t            numZeros = std::min(maxSectionSize, digitalPoleZeros.zeros.size());
-            std::vector<std::complex<T>> sectionZeros;
+            const std::size_t                 numZeros = std::min(maxSectionSize, digitalPoleZeros.zeros.size());
+            std::vector<std::complex<double>> sectionZeros;
             if (!digitalPoleZeros.zeros.empty()) { // ensure we have zeros to pair with the pole
                 sectionZeros.assign(digitalPoleZeros.zeros.begin(), digitalPoleZeros.zeros.begin() + static_cast<ptrdiff_t>(numZeros));
                 digitalPoleZeros.zeros.erase(digitalPoleZeros.zeros.begin(), digitalPoleZeros.zeros.begin() + static_cast<ptrdiff_t>(numZeros));
@@ -928,6 +961,14 @@ requires((maxSectionSize & 1) == 0) // to handle complex conjugate pole-zero pai
             FilterCoefficients<T> section;
             section.a = expandRootsToPolynomial<T>(sectionPoles, numPoles);
             section.b = expandRootsToPolynomial<T>(sectionZeros, numPoles); // Ensure it's the same order as the denominator
+
+            // A section is returned only if its stored coefficients keep the poles inside the unit circle. T resolves
+            // a pole at a distance d from z = 1 only while d is above the ULP there, and d falls as (f/fs)² for a
+            // second-order corner, so a narrow corner at a high sampling rate is a design this type cannot carry.
+            if (hasPoleOnOrOutsideUnitCircle(section.a)) {
+                throw std::invalid_argument(std::format("({}, {}, {}) section denominator {} in {} has a pole on or outside the unit circle for fs = {} f = [{},{}]", //
+                    magic_enum::enum_name(filterDesign), magic_enum::enum_name(filterType), params.order, section.a, gr::meta::type_name<T>(), params.fs, params.fLow, params.fHigh));
+            }
 
             // Adjust the gain for each section if necessary
             const auto [ok, actualGain] = normaliseFilterCoefficients(section, referenceFrequency / static_cast<T>(params.fs), static_cast<T>(params.gain));
