@@ -296,6 +296,106 @@ const boost::ut::suite<"IIR FilterTool"> iirFilterToolTests = [] {
         expect(lt(magnitude(highPass, 0.), 1.e-3)) << std::format("high-pass rejects DC by more than 60 dB: {:.3e}", magnitude(highPass, 0.));
     };
 
+    // A section carries the poles it was designed with: the polynomial is expanded in double and narrowed to the
+    // design type, and a section whose narrowed coefficients hold a pole on or outside the unit circle is refused.
+    "IIR narrow corner in single precision"_test = [] {
+        constexpr double fs = 2.e6;
+
+        // poles of a biquad 1 + a1·z⁻¹ + a2·z⁻², i.e. the roots of z² + a1·z + a2
+        const auto biquadPole = [](const auto& section) {
+            const double a1           = static_cast<double>(section.a[1]);
+            const double a2           = static_cast<double>(section.a[2]);
+            const double discriminant = a1 * a1 - 4. * a2;
+            expect(lt(discriminant, 0.)) << std::format("a = {} has real poles", section.a);
+            return std::complex<double>{-0.5 * a1, 0.5 * std::sqrt(std::max(0., -discriminant))};
+        };
+
+        // a 10 Hz corner at 2 MS/s puts the pole pair 2.2e-5 from z = 1, where a float ULP is 6e-8
+        const auto float10Hz = iir::designFilter<float>(Type::HIGHPASS, {.order = 2UZ, .fHigh = 10., .fs = fs}, BUTTERWORTH);
+        expect(eq(float10Hz.size(), 1UZ)) << "a second-order design is one biquad";
+        const float dcDenominator = std::accumulate(float10Hz[0].a.cbegin(), float10Hz[0].a.cend(), 0.f);
+        expect(gt(dcDenominator, 0.f)) << std::format("A(1) = {:e} places a pole at or beyond z = 1, a = {}", dcDenominator, float10Hz[0].a);
+        expect(lt(std::abs(biquadPole(float10Hz[0])), 1.)) << std::format("pole {} is not inside the unit circle", biquadPole(float10Hz[0]));
+        expect(not iir::hasPoleOnOrOutsideUnitCircle(float10Hz[0].a)) << std::format("a = {} is not a stable denominator", float10Hz[0].a);
+
+        // the coefficients a filter runs are the double design's, rounded once
+        for (const double fc : {10., 100., 1000.}) {
+            const auto asFloat  = iir::designFilter<float>(Type::HIGHPASS, {.order = 2UZ, .fHigh = fc, .fs = fs}, BUTTERWORTH);
+            const auto asDouble = iir::designFilter<double, 2UZ>(Type::HIGHPASS, {.order = 2UZ, .fHigh = fc, .fs = fs}, BUTTERWORTH);
+            expect(eq(asFloat.size(), asDouble.size())) << std::format("fc = {} Hz section count", fc);
+            std::vector<float> narrowed(asDouble[0].a.size());
+            std::ranges::transform(asDouble[0].a, narrowed.begin(), [](double coefficient) { return static_cast<float>(coefficient); });
+            expect(asFloat[0].a == narrowed) << std::format("fc = {} Hz: float denominator {} is not the double design {} rounded", fc, asFloat[0].a, narrowed);
+        }
+
+        // at a corner the type can resolve, the pole angle survives the rounding
+        const auto   floatCorner  = iir::designFilter<float>(Type::HIGHPASS, {.order = 2UZ, .fHigh = 2000., .fs = fs}, BUTTERWORTH);
+        const auto   doubleCorner = iir::designFilter<double, 2UZ>(Type::HIGHPASS, {.order = 2UZ, .fHigh = 2000., .fs = fs}, BUTTERWORTH);
+        const double floatAngle   = std::arg(biquadPole(floatCorner[0]));
+        const double doubleAngle  = std::arg(biquadPole(doubleCorner[0]));
+        expect(approx(floatAngle, doubleAngle, 0.01 * doubleAngle)) << std::format("pole angle {:e} rad against {:e} rad", floatAngle, doubleAngle);
+
+        // a corner the type cannot resolve is refused, not returned: at fc/fs = 5e-10 the float coefficients are
+        // {1, -2, 1}, a double pole at z = 1
+        expect(throws<std::invalid_argument>([] { std::ignore = iir::designFilter<float>(Type::HIGHPASS, {.order = 2UZ, .fHigh = 0.001, .fs = fs}, BUTTERWORTH); })) //
+            << "a pole rounded onto the unit circle must not be returned";
+        // double carries corners three decades below the float limit; at fc/fs = 5e-7 its A(1) is 1e-11, five
+        // orders of magnitude above its own resolution there
+        expect(nothrow([] { std::ignore = iir::designFilter<double, 2UZ>(Type::HIGHPASS, {.order = 2UZ, .fHigh = 1., .fs = fs}, BUTTERWORTH); })) //
+            << "a corner float cannot hold is still a valid double design";
+        expect(throws<std::invalid_argument>([] { std::ignore = iir::designFilter<float>(Type::HIGHPASS, {.order = 2UZ, .fHigh = 1., .fs = fs}, BUTTERWORTH); })) //
+            << "the same corner in float puts the pole outside the circle";
+    };
+
+    // the double designs are fixed: the polynomial is accumulated in double whatever the coefficient type
+    "IIR double design coefficients"_test = [] {
+        struct Reference {
+            std::string_view                 name;
+            Type                             type;
+            FilterParameters                 params;
+            std::vector<std::vector<double>> a;
+            std::vector<std::vector<double>> b;
+        };
+
+        const std::vector<Reference> references{
+            {"HIGHPASS order 2, fHigh = 10 Hz, fs = 2 MHz", Type::HIGHPASS, {.order = 2UZ, .fHigh = 10., .fs = 2.e6}, //
+                {{1., -1.9999555711706254, 0.99995557215756392}},                                                     //
+                {{0.99997778583204722, -1.9999555716640944, 0.99997778583204722}}},
+            {"LOWPASS order 4, fLow = 250 Hz, fs = 1 kHz", Type::LOWPASS, {.order = 4UZ, .fLow = 250., .fs = 1000.},       //
+                {{1., -1.2789769243681805e-16, 0.039566129896580066}, {1., -3.4106051316484815e-16, 0.44646269217168966}}, //
+                {{0.25989153247414498, 0.51978306494828996, 0.25989153247414498}, {0.3616156730429223, 0.72323134608584461, 0.3616156730429223}}},
+            {"BANDPASS order 2, f = [4, 6] Hz, fs = 1 kHz", Type::BANDPASS, {.order = 2UZ, .fLow = 4., .fHigh = 6., .fs = 1000.}, //
+                {{1., -1.9886233366177961, 0.9898838585397981}, {1., -1.9917191721414462, 0.99242496191751817}},                  //
+                {{0.00011126818251529208, 0.00022253636503058417, 0.00011126818251529208}, {0.35167470623315972, -0.70334941246631943, 0.35167470623315972}}},
+        };
+
+        // Each coefficient is held within a band of its section's largest coefficient rather than compared bit for
+        // bit: a design built from tan, exp and cos ends in bits that follow the platform's libm and its use of
+        // fused multiply-add. A denominator carries those bits unamplified. A numerator is divided by the section's
+        // magnitude at the reference frequency, and for a pass-band 0.2 % of the sampling rate wide that magnitude
+        // cancels the denominator sum to two parts in ten thousand of its terms, which lifts a last-bit difference
+        // to 1e-11. Neither band admits a change to a design, which moves a coefficient far further.
+        const auto expectCoefficients = [](const std::vector<double>& actual, const std::vector<double>& expected, double band, std::string_view what) {
+            expect(eq(actual.size(), expected.size())) << std::format("{}: {} coefficients against {}", what, actual.size(), expected.size());
+            double scale = 0.;
+            for (const double coefficient : expected) {
+                scale = std::max(scale, std::abs(coefficient));
+            }
+            for (std::size_t i = 0UZ; i < std::min(actual.size(), expected.size()); ++i) {
+                expect(approx(actual[i], expected[i], band * scale)) << std::format("{}: {} against {}", what, actual, expected);
+            }
+        };
+
+        for (const auto& reference : references) {
+            const auto sections = iir::designFilter<double, 2UZ>(reference.type, reference.params, BUTTERWORTH);
+            expect(eq(sections.size(), reference.a.size())) << std::format("{}: {} sections", reference.name, sections.size());
+            for (std::size_t s = 0UZ; s < std::min(sections.size(), reference.a.size()); ++s) {
+                expectCoefficients(sections[s].a, reference.a[s], 1.e-12, std::format("{} section {}: a", reference.name, s));
+                expectCoefficients(sections[s].b, reference.b[s], 1.e-9, std::format("{} section {}: b", reference.name, s));
+            }
+        }
+    };
+
     // analytic phase of single-pole and single-zero analog sections
     "IIR analog phase response"_test = [] {
         using gr::filter::iir::PoleZeroLocations;
