@@ -224,13 +224,13 @@ template<std::floating_point T>
 constexpr void complexPreprocess(std::size_t Ncvec, std::span<const T> input, std::span<T> output, std::span<const T> butterflyTwiddles);
 
 template<Direction dir, std::floating_point T>
-static NEVER_INLINE(void) realRadix2(std::size_t stride, std::size_t nGroups, std::span<T> input, std::span<T> output, std::span<const T> twiddles);
+[[maybe_unused]] static NEVER_INLINE(void) realRadix2(std::size_t stride, std::size_t nGroups, std::span<T> input, std::span<T> output, std::span<const T> twiddles);
 template<Direction dir, std::floating_point T>
-static NEVER_INLINE(void) realRadix3(std::size_t stride, std::size_t nGroups, std::span<T> input, std::span<T> output, std::span<const T> twiddles1, std::span<const T> twiddles2);
+[[maybe_unused]] static NEVER_INLINE(void) realRadix3(std::size_t stride, std::size_t nGroups, std::span<T> input, std::span<T> output, std::span<const T> twiddles1, std::span<const T> twiddles2);
 template<Direction direction, std::floating_point T>
-static NEVER_INLINE(void) realRadix4(std::size_t stride, std::size_t nGroups, std::span<T> input, std::span<T> output, std::span<const T> twiddles1, std::span<const T> twiddles2, std::span<const T> twiddles3);
+[[maybe_unused]] static NEVER_INLINE(void) realRadix4(std::size_t stride, std::size_t nGroups, std::span<T> input, std::span<T> output, std::span<const T> twiddles1, std::span<const T> twiddles2, std::span<const T> twiddles3);
 template<Direction direction, std::floating_point T>
-static NEVER_INLINE(void) realRadix5(std::size_t stride, std::size_t nGroups, std::span<T> input, std::span<T> output, std::span<const T> twiddles1, std::span<const T> twiddles2, std::span<const T> twiddles3, std::span<const T> twiddles4);
+[[maybe_unused]] static NEVER_INLINE(void) realRadix5(std::size_t stride, std::size_t nGroups, std::span<T> input, std::span<T> output, std::span<const T> twiddles1, std::span<const T> twiddles2, std::span<const T> twiddles3, std::span<const T> twiddles4);
 
 template<std::array<std::size_t, 5UZ> ntryh>
 static constexpr std::size_t decompose(std::size_t n, std::span<std::size_t> radixPlan);
@@ -242,7 +242,7 @@ template<Direction dir, Transform transform, std::floating_point T>
 static NEVER_INLINE(std::span<T>) fftStages(std::size_t nVectors, std::span<const T> input, std::span<T> workBuffer1, std::span<T> workBuffer2, std::span<const T> twiddles, std::span<const std::size_t, 15> radixPlan);
 
 template<std::floating_point T>
-static void reversed_copy(std::size_t N, const vec<T>* in, std::size_t in_stride, vec<T>* out);
+[[maybe_unused]] static void reversed_copy(std::size_t N, const vec<T>* in, std::size_t in_stride, vec<T>* out);
 template<std::floating_point T>
 void unreversed_copy(std::size_t N, const vec<T>* in, vec<T>* out, int out_stride);
 
