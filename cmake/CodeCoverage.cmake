@@ -773,7 +773,8 @@ function(setup_target_for_coverage_fastcov)
   add_custom_command(
     TARGET ${Coverage_NAME}
     POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E echo ${INFO_MSG})
+    COMMAND ${CMAKE_COMMAND} -E echo ${INFO_MSG}
+    COMMENT "Reporting the generated fastcov output location.")
 
 endfunction() # setup_target_for_coverage_fastcov
 
