@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Copyright 2026 Marcus Müller
+# shellcheck source=.github/ci-tools/common.bash
 source "$(dirname "$(realpath "$0")")/common.bash"
 
 type -p sccache > /dev/null || bail_with_message 'sccache' 'skipping sccache setup: sccache not found'
