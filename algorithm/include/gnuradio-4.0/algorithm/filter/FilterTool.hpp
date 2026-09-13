@@ -113,45 +113,51 @@ namespace detail {
 template<typename T, std::size_t bufferSize = std::dynamic_extent, typename TBaseType = meta::fundamental_base_value_type_t<T>>
 struct Section;
 
+/// recursion state of a filter section: at least double for floating-point samples, the sample type itself otherwise
+template<typename T>
+using StateType = std::conditional_t<std::is_floating_point_v<T>, std::common_type_t<T, double>, T>;
+
 template<typename T, std::size_t bufferSize, Form form = std::is_floating_point_v<T> ? Form::DF_II : Form::DF_I, auto execPolicy = std::execution::unseq>
 [[nodiscard]] inline constexpr T computeFilter(const T& input, Section<T, bufferSize>& section) noexcept {
-    const auto& a             = section.a;
-    const auto& b             = section.b;
-    auto&       inputHistory  = section.inputHistory;
-    auto&       outputHistory = section.outputHistory;
+    using TState               = StateType<T>;
+    const auto&  a             = section.a;
+    const auto&  b             = section.b;
+    auto&        inputHistory  = section.inputHistory;
+    auto&        outputHistory = section.outputHistory;
+    const TState x             = static_cast<TState>(input);
     if constexpr (form == Form::DF_I) {
         // y[n] = b[0]·x[n]   + b[1]·x[n-1] + … + b[N]·x[n-N]
         //      - a[1]·y[n-1] - a[2]·y[n-2] - … - a[M]·y[n-M]
-        inputHistory.push_front(input);
-        T output = std::transform_reduce(execPolicy, b.cbegin(), b.cend(), inputHistory.cbegin(), static_cast<T>(0), std::plus<>(), std::multiplies<>())                // feed-forward path
-                   - std::transform_reduce(execPolicy, std::next(a.cbegin()), a.cend(), outputHistory.cbegin(), static_cast<T>(0), std::plus<>(), std::multiplies<>()); // feedback path
+        inputHistory.push_front(x);
+        TState output = std::transform_reduce(execPolicy, b.cbegin(), b.cend(), inputHistory.cbegin(), TState{0}, std::plus<>(), std::multiplies<>())                // feed-forward path
+                        - std::transform_reduce(execPolicy, std::next(a.cbegin()), a.cend(), outputHistory.cbegin(), TState{0}, std::plus<>(), std::multiplies<>()); // feedback path
         outputHistory.push_front(output);
-        return output;
+        return static_cast<T>(output);
     } else if constexpr (form == Form::DF_II) {
         // w[n] = x[n] - a[1]·w[n-1] - a[2]·w[n-2] - … - a[M]·w[n-M]
         // y[n] =        b[0]·w[n]   + b[1]·w[n-1] + … + b[N]·w[n-N]
         if (a.size() > 1) {
-            const T w = input - std::transform_reduce(execPolicy, std::next(a.cbegin()), a.cend(), inputHistory.cbegin(), T{0}, std::plus<>(), std::multiplies<>());
+            const TState w = x - std::transform_reduce(execPolicy, std::next(a.cbegin()), a.cend(), inputHistory.cbegin(), TState{0}, std::plus<>(), std::multiplies<>());
             inputHistory.push_front(w);
-            return std::transform_reduce(execPolicy, b.cbegin(), b.cend(), inputHistory.cbegin(), T{0}, std::plus<>(), std::multiplies<>());
+            return static_cast<T>(std::transform_reduce(execPolicy, b.cbegin(), b.cend(), inputHistory.cbegin(), TState{0}, std::plus<>(), std::multiplies<>()));
         } else {
-            inputHistory.push_front(input);
-            return std::transform_reduce(execPolicy, b.cbegin(), b.cend(), inputHistory.cbegin(), T{0}, std::plus<>(), std::multiplies<>());
+            inputHistory.push_front(x);
+            return static_cast<T>(std::transform_reduce(execPolicy, b.cbegin(), b.cend(), inputHistory.cbegin(), TState{0}, std::plus<>(), std::multiplies<>()));
         }
     } else if constexpr (form == Form::DF_I_TRANSPOSED) {
         // w_1[n] = x[n] - a[1]·w_2[n-1] - a[2]·w_2[n-2] - … - a[M]·w_2[n-M]
         // y[n]   = b[0]·w_2[n] + b[1]·w_2[n-1] + … + b[N]·w_2[n-N]
-        T v0 = input - std::transform_reduce(execPolicy, std::next(a.cbegin()), a.cend(), outputHistory.cbegin(), static_cast<T>(0), std::plus<>(), std::multiplies<>());
+        TState v0 = x - std::transform_reduce(execPolicy, std::next(a.cbegin()), a.cend(), outputHistory.cbegin(), TState{0}, std::plus<>(), std::multiplies<>());
         outputHistory.push_front(v0);
-        return std::transform_reduce(execPolicy, b.cbegin(), b.cend(), outputHistory.cbegin(), T{0}, std::plus<>(), std::multiplies<>());
+        return static_cast<T>(std::transform_reduce(execPolicy, b.cbegin(), b.cend(), outputHistory.cbegin(), TState{0}, std::plus<>(), std::multiplies<>()));
     } else if constexpr (form == Form::DF_II_TRANSPOSED) {
         // y[n] = b_0·f[n] + \sum_(k=1)^N(b_k·f[n−k] − a_k·y[n−k])
-        T output = b[0] * input                                                                                                                                       //
-                   + std::transform_reduce(execPolicy, std::next(b.cbegin()), b.cend(), inputHistory.cbegin(), static_cast<T>(0), std::plus<>(), std::multiplies<>()) //
-                   - std::transform_reduce(execPolicy, std::next(a.cbegin()), a.cend(), outputHistory.cbegin(), static_cast<T>(0), std::plus<>(), std::multiplies<>());
-        inputHistory.push_front(input);
+        TState output = static_cast<TState>(b[0]) * x                                                                                                              //
+                        + std::transform_reduce(execPolicy, std::next(b.cbegin()), b.cend(), inputHistory.cbegin(), TState{0}, std::plus<>(), std::multiplies<>()) //
+                        - std::transform_reduce(execPolicy, std::next(a.cbegin()), a.cend(), outputHistory.cbegin(), TState{0}, std::plus<>(), std::multiplies<>());
+        inputHistory.push_front(x);
         outputHistory.push_front(output);
-        return output;
+        return static_cast<T>(output);
     } else {
         static_assert(gr::meta::always_false<T>, "should not reach here");
     }
@@ -181,12 +187,20 @@ inline constexpr std::vector<T> computeAutoCorrelation(const std::vector<T>& imp
     return autoCorrelation;
 }
 
+/**
+ * @brief one section of the filter cascade: its coefficients, its recursion state and the auto-correlation of its impulse response.
+ *
+ * Under a constant input a direct-form section holds x/A(1) in its state, and A(1) = |1 - pole|² falls as the square of f_c/f_s;
+ * at a narrow corner that state is far beyond what single precision resolves, so state and accumulation are kept in @a state_type
+ * while the coefficients, the input and the output stay at the sample type.
+ */
 template<typename T, std::size_t bufferSize, typename TBaseType>
 struct Section : public FilterCoefficients<TBaseType> {
+    using state_type = StateType<T>;
     // note: bufferSize as upper maximum, since most IIR filter sections will have to be much smaller (for numerical stability reasons)
-    HistoryBuffer<T, bufferSize> inputHistory{};
-    HistoryBuffer<T, bufferSize> outputHistory{};
-    std::vector<T>               autoCorrelation{}; // w.r.t. impulse response, computed for the combined feed-forward and -feedback filter length only
+    HistoryBuffer<state_type, bufferSize> inputHistory{};
+    HistoryBuffer<state_type, bufferSize> outputHistory{};
+    std::vector<T>                        autoCorrelation{}; // w.r.t. impulse response, computed for the combined feed-forward and -feedback filter length only
 
     explicit Section(const FilterCoefficients<TBaseType>& section)
     requires(bufferSize == std::dynamic_extent)
@@ -203,8 +217,8 @@ struct Section : public FilterCoefficients<TBaseType> {
     }
 
     inline constexpr void reset(T defaultValue = T()) {
-        inputHistory.reset(defaultValue);
-        outputHistory.reset(defaultValue);
+        inputHistory.reset(static_cast<state_type>(defaultValue));
+        outputHistory.reset(static_cast<state_type>(defaultValue));
     }
 };
 
@@ -267,6 +281,7 @@ struct Filter<UncertainValue<T>, bufferSize, form, execPolicy> {
     alignas(64UZ) std::vector<detail::Section<TBaseType, bufferSize>> _sectionsSquareUncertaintyValue;
 
     [[nodiscard]] inline constexpr TBaseType propagateError(const TBaseType& inputUncertainty, detail::Section<TBaseType, bufferSize>& section) noexcept {
+        using TState                        = detail::StateType<TBaseType>;
         const auto& a                       = section.a;
         const auto& b                       = section.b;
         auto&       inputHistory            = section.inputHistory;
@@ -274,28 +289,28 @@ struct Filter<UncertainValue<T>, bufferSize, form, execPolicy> {
         const auto& autocorrelationFunction = section.autoCorrelation;
 
         // Feed-forward path (uncorrelated uncertainties)
-        inputHistory.push_front(inputUncertainty * inputUncertainty);
-        TBaseType feedForwardUncertainty = std::transform_reduce(execPolicy, b.cbegin(), b.cend(), inputHistory.cbegin(), static_cast<TBaseType>(0), //
-            std::plus<>(), [](TBaseType bVal, TBaseType sigma2) { return bVal * bVal * sigma2; });
+        inputHistory.push_front(static_cast<TState>(inputUncertainty) * static_cast<TState>(inputUncertainty));
+        TState feedForwardUncertainty = std::transform_reduce(execPolicy, b.cbegin(), b.cend(), inputHistory.cbegin(), TState{0}, //
+            std::plus<>(), [](TBaseType bVal, TState sigma2) { return static_cast<TState>(bVal) * static_cast<TState>(bVal) * sigma2; });
 
         if (a.size() <= 1 || autocorrelationFunction.empty()) {
             outputHistory.push_front(feedForwardUncertainty);
-            return feedForwardUncertainty;
+            return static_cast<TBaseType>(feedForwardUncertainty);
         }
 
         // Feedback path (correlated uncertainties)
-        TBaseType feedbackUncertainty = 0;
+        TState feedbackUncertainty = 0;
         for (std::size_t j = 1; j < a.size(); ++j) {
             for (std::size_t k = 1; k < a.size(); ++k) {
-                int       jk{std::abs(static_cast<int>(j) - static_cast<int>(k))};
-                TBaseType correlationFactor = autocorrelationFunction[static_cast<std::size_t>(jk)]; // w/o causality (i.e. causality j - k < 0 -> autoC = 0.0), this is a conservative estimate, to be checked
-                feedbackUncertainty += a[j] * a[k] * correlationFactor * std::sqrt(outputHistory[j - 1]) * std::sqrt(outputHistory[k - 1]);
+                int    jk{std::abs(static_cast<int>(j) - static_cast<int>(k))};
+                TState correlationFactor = static_cast<TState>(autocorrelationFunction[static_cast<std::size_t>(jk)]); // w/o causality (i.e. causality j - k < 0 -> autoC = 0.0), this is a conservative estimate, to be checked
+                feedbackUncertainty += static_cast<TState>(a[j]) * static_cast<TState>(a[k]) * correlationFactor * std::sqrt(outputHistory[j - 1]) * std::sqrt(outputHistory[k - 1]);
             }
         }
 
-        TBaseType totalUncertainty = feedForwardUncertainty + feedbackUncertainty;
+        TState totalUncertainty = feedForwardUncertainty + feedbackUncertainty;
         outputHistory.push_front(totalUncertainty);
-        return totalUncertainty;
+        return static_cast<TBaseType>(totalUncertainty);
     }
 
     constexpr Filter() noexcept { _sectionsMeanValue.emplace_back(FilterCoefficients<TBaseType>{.b = {1}, .a = {1}}); }
