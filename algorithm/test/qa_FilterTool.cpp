@@ -411,6 +411,141 @@ const boost::ut::suite<"IIR FilterTool"> iirFilterToolTests = [] {
         }
     };
 
+    // Expanding four poles into one quartic rounds a root outside the unit circle where the two biquads the same
+    // poles form keep theirs inside: the quartic's coefficients carry the cross terms of both pairs, and its four
+    // roots crowd within 2e-4 of each other, so a last-bit change in a coefficient moves a root by 1e-4. The pinned
+    // polynomial is what a second-order band-pass over 10-20 Hz at 2 MS/s expands its poles into, held as literals so
+    // the criterion is tested without the last bits of the platform's tan and cos. It passes A(1) > 0, A(-1) > 0 and
+    // |a[4]| < 1 — the conditions that are only necessary above degree two — while an exact Schur reduction rejects
+    // it and 70-digit roots put a conjugate pair at radius 1.0000925. Such a design is returned as biquads, never as
+    // the quartic and never refused.
+    "IIR narrow band-pass keeps its poles"_test = [] {
+        constexpr double       fs     = 2.e6;
+        const FilterParameters params = {.order = 2UZ, .fLow = 10., .fHigh = 20., .fs = fs};
+
+        const std::vector<double> quartic{1., -3.9999555672228277, 5.999866706603308, -3.9998667115380444, 0.9999555721575645};
+        const double              atPlusOne  = std::accumulate(quartic.cbegin(), quartic.cend(), 0.);
+        double                    atMinusOne = 0.;
+        for (std::size_t i = 0UZ; i < quartic.size(); ++i) {
+            atMinusOne += (i % 2UZ == 0UZ) ? quartic[i] : -quartic[i];
+        }
+        expect(gt(atPlusOne, 0.)) << std::format("the quartic's A(1) = {:e} is not the case under test", atPlusOne);
+        expect(gt(atMinusOne, 0.)) << std::format("the quartic's A(-1) = {:e} is not the case under test", atMinusOne);
+        expect(lt(std::abs(quartic.back()), 1.)) << std::format("the quartic's |a[4]| = {:.12f} is not the case under test", std::abs(quartic.back()));
+        expect(iir::hasPoleOnOrOutsideUnitCircle(quartic)) << std::format("a = {} passes the necessary conditions and must still be rejected", quartic);
+
+        // and a quartic whose poles are nowhere near the circle, at 0.9·e^±0.3i and 0.5·e^±1.2i, is accepted
+        const std::vector<double> wellInside{1., -2.0819634349027645, 1.6831124529445307, -0.7234112012326284, 0.2025};
+        expect(not iir::hasPoleOnOrOutsideUnitCircle(wellInside)) << std::format("a = {} is a stable denominator", wellInside);
+
+        // 1/A(z) driven by an impulse: the largest output over the first samples against the largest over the last
+        const auto denominatorImpulse = [](const std::vector<std::vector<double>>& denominators, std::size_t total, std::size_t window) {
+            std::vector<std::vector<double>> state;
+            for (const auto& a : denominators) {
+                state.emplace_back(a.size(), 0.);
+            }
+            std::pair<double, double> extrema{0., 0.};
+            for (std::size_t n = 0UZ; n < total; ++n) {
+                double sample = (n == 0UZ) ? 1. : 0.;
+                for (std::size_t s = 0UZ; s < denominators.size(); ++s) {
+                    const std::vector<double>& a = denominators[s];
+                    double                     y = sample;
+                    for (std::size_t i = 1UZ; i < a.size(); ++i) {
+                        y -= a[i] * state[s][i];
+                    }
+                    y /= a[0];
+                    for (std::size_t i = state[s].size(); i-- > 2UZ;) {
+                        state[s][i] = state[s][i - 1UZ];
+                    }
+                    state[s][1UZ] = y;
+                    sample        = y;
+                }
+                if (n < window) {
+                    extrema.first = std::max(extrema.first, std::abs(sample));
+                }
+                if (n + window >= total) {
+                    extrema.second = std::max(extrema.second, std::abs(sample));
+                }
+            }
+            return extrema;
+        };
+
+        constexpr std::size_t kWindow          = 10'000UZ;
+        const auto [quarticFirst, quarticLast] = denominatorImpulse({quartic}, 200'000UZ, kWindow); // 1.5e11 then 1e19
+        expect(gt(quarticLast, quarticFirst)) << std::format("the quartic's impulse response does not grow: {:e} then {:e}", quarticFirst, quarticLast);
+
+        // every section of the design holds its poles, and the cascade of their denominators decays: 2e6 samples are
+        // 17 time constants of the slower pole, 8.3e-6 inside the circle, and carry 1.5e11 down to 5e5
+        const auto sections = iir::designFilter<double>(Type::BANDPASS, params, BUTTERWORTH);
+        expect(not sections.empty()) << "the design is returned, not refused";
+        std::vector<std::vector<double>> denominators;
+        for (const auto& section : sections) {
+            expect(not iir::hasPoleOnOrOutsideUnitCircle(section.a)) << std::format("returned a = {} holds a pole on or outside the unit circle", section.a);
+            denominators.push_back(section.a);
+        }
+        const auto [cascadeFirst, cascadeLast] = denominatorImpulse(denominators, 2'000'000UZ, kWindow);
+        expect(std::isfinite(cascadeLast)) << "the returned cascade's impulse response stays finite";
+        expect(lt(cascadeLast, 1.e-4 * cascadeFirst)) << std::format("the returned cascade does not decay: {:e} then {:e}", cascadeFirst, cascadeLast);
+
+        // the whole denominator the sections multiply out to is the polynomial a single section would have held;
+        // where it is the rejected one, the design is the biquad form, response for response
+        std::vector<double> expanded{1.};
+        for (const auto& section : sections) {
+            std::vector<double> product(expanded.size() + section.a.size() - 1UZ, 0.);
+            for (std::size_t i = 0UZ; i < expanded.size(); ++i) {
+                for (std::size_t j = 0UZ; j < section.a.size(); ++j) {
+                    product[i + j] += expanded[i] * section.a[j];
+                }
+            }
+            expanded = product;
+        }
+        if (iir::hasPoleOnOrOutsideUnitCircle(expanded)) {
+            const auto forced = iir::designFilter<double, 2UZ>(Type::BANDPASS, params, BUTTERWORTH);
+            expect(eq(sections.size(), 2UZ)) << std::format("four poles no quartic can hold give two sections, not {}", sections.size());
+            expect(eq(sections.size(), forced.size())) << std::format("{} sections against {} forced biquads", sections.size(), forced.size());
+            for (const double frequency : {5., 10., 15., 20., 40.}) {
+                const double designed = calculateResponse<Normalised, Magnitude>(frequency / fs, sections);
+                const double biquads  = calculateResponse<Normalised, Magnitude>(frequency / fs, forced);
+                expect(approx(designed, biquads, 1.e-12)) << std::format("|H({} Hz)| = {:.17g} against {:.17g}", frequency, designed, biquads);
+            }
+        }
+    };
+
+    // The polynomial is expanded in std::common_type_t<T, double>, so a coefficient type wider than double keeps the
+    // bits of |p|² that double rounding discards. A second-order Chebyshev-II low-pass at 0.02 Hz on 2 MS/s puts its
+    // pole 6.3e-9 inside the circle: in double a[2] rounds to -1 - a[1], A(1) collapses to 0 and the section is
+    // refused, while long double holds A(1) = 7.9e-17 and returns the design.
+    "IIR narrow corner in extended precision"_test = [] {
+        // where long double is double the design is genuinely out of reach and refusing it is the right answer
+        if constexpr (std::numeric_limits<long double>::digits > std::numeric_limits<double>::digits) {
+            constexpr double       fs     = 2.e6;
+            const FilterParameters params = {.order = 2UZ, .fLow = 0.02, .fs = fs};
+
+            expect(nothrow([&params] { std::ignore = iir::designFilter<long double>(Type::LOWPASS, params, CHEBYSHEV2); })) //
+                << "a corner double cannot hold is still a valid long double design";
+            const auto sections = iir::designFilter<long double>(Type::LOWPASS, params, CHEBYSHEV2);
+            expect(eq(sections.size(), 1UZ)) << std::format("a second-order design is one biquad, not {}", sections.size());
+
+            const std::vector<long double>& a         = sections[0].a;
+            const auto                      deviation = [](long double actual, long double expected) { return static_cast<double>(std::abs(actual - expected)); };
+            expect(eq(a.size(), 3UZ)) << std::format("{} denominator coefficients", a.size());
+            expect(lt(deviation(a[0], 1.L), 1.e-15)) << std::format("a[0] = {:.20g}", static_cast<double>(a[0]));
+            expect(lt(deviation(a[1], -1.99999998749661922481L), 1.e-15)) << std::format("a[1] = {:.20g} against -1.99999998749661922481", static_cast<double>(a[1]));
+            expect(lt(deviation(a[2], 0.999999987496619303798L), 1.e-15)) << std::format("a[2] = {:.20g} against 0.999999987496619303798", static_cast<double>(a[2]));
+
+            const long double atPlusOne = a[0] + a[1] + a[2];
+            expect(gt(static_cast<double>(atPlusOne), 0.)) << std::format("A(1) = {:e} places a pole at or beyond z = 1", static_cast<double>(atPlusOne));
+            expect(lt(deviation(atPlusOne, 7.8984e-17L), 5.e-18)) << std::format("A(1) = {:e} against 7.8984e-17", static_cast<double>(atPlusOne));
+            const long double radius = std::sqrt(a[2]);
+            expect(lt(deviation(radius, 0.9999999937483096L), 1.e-15)) << std::format("pole radius {:.17g} against 0.9999999937483096", static_cast<double>(radius));
+            expect(not iir::hasPoleOnOrOutsideUnitCircle(a)) << std::format("a[1] = {:.20g} is not a stable denominator", static_cast<double>(a[1]));
+
+            // the same corner in double: a[2] and a[1] round to equal magnitudes, A(1) is 0 and the pole sits at z = 1
+            expect(throws<std::invalid_argument>([&params] { std::ignore = iir::designFilter<double, 2UZ>(Type::LOWPASS, params, CHEBYSHEV2); })) //
+                << "the same corner in double puts the pole on the unit circle";
+        }
+    };
+
     // analytic phase of single-pole and single-zero analog sections
     "IIR analog phase response"_test = [] {
         using gr::filter::iir::PoleZeroLocations;
