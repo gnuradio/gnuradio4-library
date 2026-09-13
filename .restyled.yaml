@@ -3,6 +3,9 @@ pull_requests: false # Open Restyle PRs?
 request_review: none
 labels: []
 
+exclude:
+  - "third_party/**/*"
+
 comments: false # Leave comments on the original PR linking to the Restyle PR?
 
 # Set commit statuses on the original PR?
