@@ -5,8 +5,8 @@
 #include <format>
 #include <random>
 
-#include <gnuradio-4.0/SVD.hpp>
 #include <gnuradio-4.0/Tensor.hpp>
+#include <gnuradio-4.0/algorithm/math/SVD.hpp>
 
 template<typename T>
 void randomizeMatrix(gr::Tensor<T>& matrix, unsigned seed = 42) {

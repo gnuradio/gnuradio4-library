@@ -221,6 +221,8 @@ if(ENABLE_TESTING
       qa_SimdFFT
       qa_SvdFilter
       qa_SavitzkyGolay
+      qa_TensorMath
+      qa_SVD
       qa_SampleRateEstimator
       qa_BurstTaper
       qa_FileIo
