@@ -58,6 +58,21 @@ void printFilter(std::string_view name, const Container& filters) {
     }
 }
 
+// the sections a design computed in double, rounded to float: the coefficients a float filter is asked to run at a narrow
+// corner, where expanding the polynomial in float is a separate defect
+[[nodiscard]] inline std::vector<gr::filter::FilterCoefficients<float>> narrowToFloat(const std::vector<gr::filter::FilterCoefficients<double>>& sections) {
+    const auto narrowSection = [](const gr::filter::FilterCoefficients<double>& section) {
+        gr::filter::FilterCoefficients<float> narrowed{.b = std::vector<float>(section.b.size()), .a = std::vector<float>(section.a.size())};
+        std::ranges::transform(section.b, narrowed.b.begin(), [](double value) { return static_cast<float>(value); });
+        std::ranges::transform(section.a, narrowed.a.begin(), [](double value) { return static_cast<float>(value); });
+        return narrowed;
+    };
+    std::vector<gr::filter::FilterCoefficients<float>> narrowed;
+    narrowed.reserve(sections.size());
+    std::ranges::transform(sections, std::back_inserter(narrowed), narrowSection);
+    return narrowed;
+}
+
 // signed zero-phase amplitude of a symmetric (linear-phase) FIR, i.e. H(f) with the delay term divided out
 [[nodiscard]] inline double firZeroPhaseAmplitude(const gr::filter::FilterCoefficients<double>& filter, double normalizedFrequency) {
     const double         center = static_cast<double>(filter.b.size() - 1UZ) / 2.;
@@ -338,6 +353,65 @@ const boost::ut::suite<"IIR FilterTool"> iirFilterToolTests = [] {
         }
     } | std::tuple{Filter<double, 32UZ, Form::DF_I>(), Filter<double, 32UZ, Form::DF_II>(), Filter<double, 32UZ, Form::DF_I_TRANSPOSED>(), Filter<double, 32UZ, Form::DF_II_TRANSPOSED>()};
     ;
+
+    // a 10 Hz corner on 2 MS/s: under the 0.5 DC term the section's state settles at x/A(1) ~ 5e8, which a single-precision
+    // state resolves to 32, leaving the tone buried in the second difference of numbers that cannot carry it
+    "IIR narrow corner with float samples"_test = [] {
+        constexpr double      fs        = 2.e6;
+        constexpr double      fc        = 10.;
+        constexpr double      fTone     = 1.e5;
+        constexpr double      amplitude = 0.3;
+        constexpr double      dcTerm    = 0.5;
+        constexpr std::size_t nSamples  = 1'000'000UZ; // 0.5 s, three times the 0.1 % settling time of the 10 Hz corner
+        constexpr std::size_t nSkip     = nSamples / 2UZ;
+
+        auto   filter         = Filter<float, 32UZ>(narrowToFloat(iir::designFilter<double>(Type::HIGHPASS, {.order = 2UZ, .fHigh = fc, .fs = fs}, BUTTERWORTH)));
+        double errorPower     = 0.;
+        double referencePower = 0.;
+        for (std::size_t i = 0UZ; i < nSamples; ++i) {
+            const double reference = amplitude * std::cos(2. * std::numbers::pi * fTone / fs * static_cast<double>(i));
+            const double output    = static_cast<double>(filter.processOne(static_cast<float>(dcTerm + reference)));
+            if (i >= nSkip) {
+                errorPower += (output - reference) * (output - reference);
+                referencePower += reference * reference;
+            }
+        }
+        const double errorVectorDb = 10. * std::log10(errorPower / referencePower);
+        std::println("IIR 10 Hz high-pass on 2 MS/s in Filter<float>: error vector {:.2f} dB", errorVectorDb);
+        expect(lt(errorVectorDb, -60.)) << std::format("10 Hz high-pass on 2 MS/s in Filter<float>: error vector {:.2f} dB relative to the tone", errorVectorDb);
+    };
+
+    // a 2 Hz corner on 10 kHz carrying a 230 V DC input: the state settles at 1.4e8, where a single-precision step is 16
+    "IIR high-pass on a large DC input with float samples"_test = [] {
+        constexpr double      fs       = 1.e4;
+        constexpr double      fc       = 2.;
+        constexpr float       dcInput  = 230.f;
+        constexpr std::size_t nSamples = 20'000UZ; // two seconds, about 18 time constants of the 2 Hz corner
+        constexpr std::size_t nSkip    = 19'000UZ;
+
+        auto  filter   = Filter<float, 32UZ>(narrowToFloat(iir::designFilter<double>(Type::HIGHPASS, {.order = 2UZ, .fHigh = fc, .fs = fs}, BUTTERWORTH)));
+        float residual = 0.f;
+        for (std::size_t i = 0UZ; i < nSamples; ++i) {
+            const float output = filter.processOne(dcInput);
+            if (i >= nSkip) {
+                residual = std::max(residual, std::abs(output));
+            }
+        }
+        std::println("IIR 2 Hz high-pass on 10 kHz in Filter<float>: |output| {:.3e} for a constant {}", residual, dcInput);
+        expect(lt(residual, 1.e-3f)) << std::format("2 Hz high-pass on 10 kHz, constant {}: |output| {:.3e} after two seconds", dcInput, residual);
+    };
+
+    // integral samples keep an exact recursion in their own type and are not widened
+    "integral sections keep the sample type as their state"_test = [] {
+        static_assert(std::is_same_v<gr::filter::detail::Section<float, 32UZ>::state_type, double>);
+        static_assert(std::is_same_v<gr::filter::detail::Section<double, 32UZ>::state_type, double>);
+        static_assert(std::is_same_v<gr::filter::detail::Section<int, 32UZ>::state_type, int>);
+
+        auto filter = Filter<int, 32UZ>(FilterCoefficients<int>{.b = {1, 1}, .a = {1}}); // y[n] = x[n] + x[n-1]
+        expect(eq(filter.processOne(2), 2));
+        expect(eq(filter.processOne(3), 5));
+        expect(eq(filter.processOne(0), 3));
+    };
 
     tag("visual") / "basic analog low-/high-/band-pass filter - frequency"_test = []() {
         using namespace gr::graphs;
