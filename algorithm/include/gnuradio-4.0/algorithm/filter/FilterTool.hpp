@@ -71,7 +71,7 @@ struct FilterParameters {
     double      gain{1.0};                                       /// required total filter gain
     double      rippleDb{0.1};                                   /// Maximum allowed ripple in the pass-band [dB].
     double      attenuationDb{40};                               /// Minimum required attenuation in the stop-band [dB].
-    double      beta{1.6};                                       /// default beta for Kaiser-type windowing
+    double      param{std::numeric_limits<double>::quiet_NaN()}; /// window shape parameter (Kaiser beta, Tukey alpha, ...); NaN takes the window's own default
     double      fs{std::numeric_limits<double>::quiet_NaN()};    /// Sampling frequency for digital filters [Hertz].
 };
 
@@ -440,6 +440,44 @@ template<typename T>
     }
     std::ranges::transform(coefficients.b, coefficients.b.begin(), [magnitude, targetGain](T coeff) { return coeff * targetGain / magnitude; });
     return {true, magnitude};
+}
+
+/**
+ * @brief The signed zero-phase amplitude A(f) of a linear-phase FIR: H(e^{jw}) with its own delay divided out.
+ *
+ * `calculateResponse<Normalised, Magnitude>` returns |H|, which is positive everywhere. A linear-phase
+ * FIR has `H(e^{jw}) = e^{-jwM} A(w)` with `M = (N-1)/2` and A real, and A carries a sign that |H| has
+ * thrown away. The sign is what a normalization needs: a high-pass normalized at Nyquist against |H|
+ * inverts the whole design wherever A is negative there, and nothing reports it.
+ *
+ * The delay is divided out per tap rather than factored out, so the expression holds for any coefficient
+ * set; the imaginary part, which is zero for an exactly linear-phase set, is dropped.
+ */
+template<std::floating_point T>
+[[nodiscard]] inline T signedAmplitudeAt(const FilterCoefficients<T>& coefficients, T normalisedFrequency) {
+    const T         centre = static_cast<T>(coefficients.b.size() - 1UZ) / static_cast<T>(2);
+    std::complex<T> sum{};
+    for (std::size_t n = 0UZ; n < coefficients.b.size(); ++n) {
+        sum += coefficients.b[n] * std::polar(static_cast<T>(1), static_cast<T>(-2) * std::numbers::pi_v<T> * normalisedFrequency * (static_cast<T>(n) - centre));
+    }
+    return sum.real();
+}
+
+/// @brief The value at the reference frequency that a normalization divides by.
+enum class NormalizationReference {
+    Magnitude,      /// |H(f)|, positive by construction
+    SignedAmplitude /// A(f), the zero-phase amplitude of a linear-phase FIR, sign included
+};
+
+/// @brief As the three-argument form, but reading the stated reference rather than the magnitude.
+template<std::floating_point T>
+[[nodiscard]] inline std::pair<bool, T> normaliseFilterCoefficients(FilterCoefficients<T>& coefficients, T normalisedFrequency, T targetGain, NormalizationReference reference) {
+    const T value = reference == NormalizationReference::SignedAmplitude ? signedAmplitudeAt(coefficients, normalisedFrequency) : calculateResponse<Frequency::Normalised, ResponseType::Magnitude>(normalisedFrequency, coefficients);
+    if (value == 0) {
+        return {false, value};
+    }
+    std::ranges::transform(coefficients.b, coefficients.b.begin(), [value, targetGain](T coeff) { return coeff * targetGain / value; });
+    return {true, value};
 }
 
 namespace iir {
@@ -1097,12 +1135,12 @@ FilterCoefficients<T> designResonatorRF(T samplingRateHz, T frequency, T Q, std:
 namespace fir {
 
 template<std::floating_point T>
-[[nodiscard]] inline constexpr FilterCoefficients<T> generateCoefficients(std::size_t N, gr::algorithm::window::Type window, T fc, T beta = static_cast<T>(1.6)) {
+[[nodiscard]] inline constexpr FilterCoefficients<T> generateCoefficients(std::size_t N, gr::algorithm::window::Type window, T fc, T param = std::numeric_limits<T>::quiet_NaN()) {
     const T    M    = static_cast<T>(N - 1) / static_cast<T>(2);
     const auto sinc = [](T x, T a = std::numbers::pi_v<T>) noexcept -> T { return x == static_cast<T>(0) ? static_cast<T>(1) : std::sin(a * x) / (a * x); };
 
     std::vector<T> coefficients(N);
-    gr::algorithm::window::create(coefficients, window, beta);
+    gr::algorithm::window::create(coefficients, window, param);
 
     std::size_t index = 0; // Index variable to keep track of the current index
     std::ranges::transform(coefficients, coefficients.begin(), [&index, M, fc, &sinc](T coeff) { return coeff * static_cast<T>(2) * fc * sinc(static_cast<T>(2) * fc * (static_cast<T>(index++) - M)); });
@@ -1125,6 +1163,23 @@ template<std::floating_point T>
     return N;
 }
 
+/**
+ * @brief Kaiser's shape parameter for a stated stopband attenuation, from Kaiser's empirical fit.
+ *
+ * @param attenuationStopBand attenuation in the stopband (in dB), stated positive
+ * @return the value `window::create` takes as the Kaiser window's `param`; zero below 21 dB, where a
+ *         rectangular window already reaches the attenuation and no shaping is asked for
+ */
+[[nodiscard]] inline double kaiserBeta(double attenuationStopBand) {
+    if (attenuationStopBand > 50.0) {
+        return 0.1102 * (attenuationStopBand - 8.7);
+    }
+    if (attenuationStopBand > 21.0) {
+        return 0.5842 * std::pow(attenuationStopBand - 21.0, 0.4) + 0.07886 * (attenuationStopBand - 21.0);
+    }
+    return 0.0;
+}
+
 [[nodiscard]] inline constexpr double estimateRequiredTransitionWidth(const Type filterType, FilterParameters params) {
     // assumption: increase #taps to achieve the required filter corner frequencies and pass-band attenuation targets
     const double minWidthFromOrder  = 0.1 / static_cast<double>(params.order); // N.B. Butterworth approximation: 20 dB attenuation per decade and order
@@ -1145,7 +1200,7 @@ template<std::floating_point T>
     // design high-pass FIR filter using the window method
     switch (filterType) {
     case Type::LOWPASS: {
-        auto lowPassCoefficients    = generateCoefficients<T>(N, window, static_cast<T>(params.fLow / params.fs), static_cast<T>(params.beta));
+        auto lowPassCoefficients    = generateCoefficients<T>(N, window, static_cast<T>(params.fLow / params.fs), static_cast<T>(params.param));
         const auto [ok, actualGain] = normaliseFilterCoefficients(lowPassCoefficients, static_cast<T>(0), static_cast<T>(params.gain));
         if (ok) {
             return lowPassCoefficients;
@@ -1155,7 +1210,7 @@ template<std::floating_point T>
     }
     case Type::HIGHPASS: {
         // generate low-pass filter coefficients with "mirror" frequency (f_s/2 - f_c)
-        auto highPassCoefficients = generateCoefficients<T>(N, window, static_cast<T>((0.5 - params.fHigh / params.fs)), static_cast<T>(params.beta));
+        auto highPassCoefficients = generateCoefficients<T>(N, window, static_cast<T>((0.5 - params.fHigh / params.fs)), static_cast<T>(params.param));
 
         for (std::size_t n = 0UZ; n < N; ++n) {
             // apply spectral inversion by multiplying each coefficient with (-1)^n
@@ -1170,8 +1225,8 @@ template<std::floating_point T>
             magic_enum::enum_name(filterType), params.order, magic_enum::enum_name(window), actualGain, params.gain, params.fs, params.fLow, params.fHigh));
     }
     case Type::BANDPASS: {
-        auto bandPassCoefficients = generateCoefficients<T>(N, window, static_cast<T>(params.fLow / params.fs), static_cast<T>(params.beta));
-        auto highPassCoefficients = generateCoefficients<T>(N, window, static_cast<T>(params.fHigh / params.fs), static_cast<T>(params.beta));
+        auto bandPassCoefficients = generateCoefficients<T>(N, window, static_cast<T>(params.fLow / params.fs), static_cast<T>(params.param));
+        auto highPassCoefficients = generateCoefficients<T>(N, window, static_cast<T>(params.fHigh / params.fs), static_cast<T>(params.param));
 
         std::transform(highPassCoefficients.b.begin(), highPassCoefficients.b.end(), bandPassCoefficients.b.begin(), bandPassCoefficients.b.begin(), std::minus<>());
 
@@ -1183,8 +1238,8 @@ template<std::floating_point T>
             magic_enum::enum_name(filterType), params.order, magic_enum::enum_name(window), actualGain, params.gain, params.fs, params.fLow, params.fHigh));
     }
     case Type::BANDSTOP: {
-        auto       bandStopCoefficients = generateCoefficients<T>(N, window, static_cast<T>(params.fLow / params.fs), static_cast<T>(params.beta));
-        const auto highPassCoefficients = generateCoefficients<T>(N, window, static_cast<T>(params.fHigh / params.fs), static_cast<T>(params.beta));
+        auto       bandStopCoefficients = generateCoefficients<T>(N, window, static_cast<T>(params.fLow / params.fs), static_cast<T>(params.param));
+        const auto highPassCoefficients = generateCoefficients<T>(N, window, static_cast<T>(params.fHigh / params.fs), static_cast<T>(params.param));
 
         for (std::size_t n = 0; n < N; ++n) {
             bandStopCoefficients.b[n] -= highPassCoefficients.b[n];
