@@ -595,10 +595,16 @@ template<typename Term>
  * Centering the phase ramp on the center tap (`k = n - M`, zero at `n = M`) makes the result
  * conjugate-symmetric, and conjugate symmetry gives the design exactly linear phase. The second half is the first half's conjugate, copied, so the invariant holds to the
  * bit rather than to the accuracy of two sine calls.
+ *
+ * A prototype of no taps has no center tap for the ramp to be zero at, and rotates to a design of no
+ * taps.
  */
 [[nodiscard]] inline std::vector<std::complex<double>> rotate(const std::vector<double>& proto, double fc) {
-    const std::size_t n   = proto.size();
-    const std::size_t mid = n == 0UZ ? 0UZ : (n - 1UZ) / 2UZ;
+    const std::size_t n = proto.size();
+    if (n == 0UZ) {
+        return {};
+    }
+    const std::size_t mid = (n - 1UZ) / 2UZ;
 
     std::vector<std::complex<double>> h(n);
     for (std::size_t i = 0UZ; i < mid; ++i) {
@@ -724,14 +730,18 @@ template<typename Term>
  * such a design differ from these by the passband ripple at that far point.
  *
  * One length is computed once and the container sized from it, so the length the taps are written
- * to is the length the container was reserved at.
+ * to is the length the container was reserved at. A band-pass of no taps has no center tap to place
+ * the delta on, and the band-stop is empty in turn.
  */
 [[nodiscard]] inline std::vector<std::complex<float>> complexBandstop(std::size_t n, double lowCutoff, double highCutoff, WindowSpec window, double gain = 1.0) {
     std::vector<double> proto = lowpassKernel(oddLength(n, 5), 0.5 * (highCutoff - lowCutoff), window);
     normalizeAt(proto, 0.0, 1.0);
 
-    std::vector<std::complex<double>> h   = detail::rotate(proto, 0.5 * (lowCutoff + highCutoff));
-    const std::size_t                 mid = (h.size() - 1UZ) / 2UZ;
+    std::vector<std::complex<double>> h = detail::rotate(proto, 0.5 * (lowCutoff + highCutoff));
+    if (h.empty()) {
+        return {};
+    }
+    const std::size_t mid = (h.size() - 1UZ) / 2UZ;
     for (std::complex<double>& v : h) {
         v = -v;
     }
