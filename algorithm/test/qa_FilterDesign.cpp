@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <complex>
 #include <limits>
 #include <numbers>
 #include <numeric>
@@ -592,6 +593,53 @@ const boost::ut::suite<"complex FIR band design"> complexDesignTests = [] {
         }
         expect(that % identical(complexBandpass(101, 0.1, 0.2, kaiser60), complexBandpass(101, 0.1, 0.2, kaiser60)));
         expect(that % identical(complexBandstop(101, 0.1, 0.2, kaiser60), complexBandstop(101, 0.1, 0.2, kaiser60)));
+    };
+
+    "a design of no taps is empty"_test = [&] {
+        // The rotation is the one place an empty prototype would be indexed: the center tap falls on
+        // index zero, and both the prototype and the design are then read past the end. The entry
+        // points never hand it one, their five-tap floor holding a zero request up to five taps, so
+        // the contract belongs to the rotation and to the band-stop's own delta term.
+        const std::vector<double> nothing;
+        expect(that % gr::filter::fir::design::detail::rotate(nothing, 0.25).empty()) << "no center tap for the ramp to be zero at";
+        expect(that % gr::filter::fir::design::detail::narrow(gr::filter::fir::design::detail::rotate(nothing, 0.25)).empty());
+
+        expect(eq(complexBandpass(0, 2000.0 / fs, 6000.0 / fs, kaiser60).size(), 5UZ)) << "a zero request is the band floor, not an empty design";
+        expect(eq(complexBandstop(0, 2000.0 / fs, 6000.0 / fs, kaiser60).size(), 5UZ));
+    };
+
+    "the complex pair is the closed-form rotation of its prototype, tap for tap"_test = [&] {
+        // The expected taps are computed here from the real prototype and the closed-form rotation
+        // rather than recorded from a build: proto[i] * exp(j 2 pi fc (i - M)) over the first half,
+        // conjugated onto the second, the center tap real, and the band-stop the delta minus that.
+        // An odd and an even request, so both the length asked for and the length rounded up are read.
+        constexpr double lowCutoff  = 2000.0 / fs;
+        constexpr double highCutoff = 6000.0 / fs;
+        constexpr double fc         = 0.5 * (lowCutoff + highCutoff);
+
+        for (const std::size_t requested : {31UZ, 32UZ}) {
+            const std::size_t   len   = oddLength(requested, 5UZ);
+            std::vector<double> proto = lowpassKernel(len, 0.5 * (highCutoff - lowCutoff), kaiser60);
+            normalizeAt(proto, 0.0, 1.0);
+
+            const std::size_t                 mid = (len - 1UZ) / 2UZ;
+            std::vector<std::complex<double>> rotated(len);
+            for (std::size_t i = 0UZ; i < mid; ++i) {
+                const std::complex<double> v = proto[i] * std::polar(1.0, 2.0 * std::numbers::pi * fc * (static_cast<double>(i) - static_cast<double>(mid)));
+                rotated[i]                   = v;
+                rotated[len - 1UZ - i]       = std::conj(v);
+            }
+            rotated[mid] = std::complex<double>(proto[mid], 0.0);
+
+            std::vector<std::complex<double>> delta(len);
+            for (std::size_t i = 0UZ; i < len; ++i) {
+                delta[i] = -rotated[i];
+            }
+            delta[mid] += 1.0;
+
+            expect(that % identical(complexBandpass(requested, lowCutoff, highCutoff, kaiser60), gr::filter::fir::design::detail::narrow(rotated))) << "band-pass at " << requested << " requested taps";
+            expect(that % identical(complexBandstop(requested, lowCutoff, highCutoff, kaiser60), gr::filter::fir::design::detail::narrow(delta))) << "band-stop at " << requested << " requested taps";
+        }
     };
 };
 
