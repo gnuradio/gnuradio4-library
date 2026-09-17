@@ -242,6 +242,36 @@ const boost::ut::suite<"FIR lowpass design"> filterDesignTests = [] {
         expect(throws<std::invalid_argument>([] { [[maybe_unused]] const WindowFigures unused = windowFigures(Type::Gaussian); }));
     };
 
+    "the tabled attenuation is the figure at the length it was measured at"_test = [] {
+        using gr::algorithm::window::Type;
+        // The figures are measured at N = 1023, where the length no longer moves the stopband, and read
+        // as the highest response beyond the first null -- the same reading the window set's own
+        // characterization makes. The test above allows 1.5 dB because a design at the transition
+        // constant's length is short enough for the length to still matter; this one reads at the length
+        // the figure belongs to and holds it to the 0.3 dB the characterization resolves.
+        //
+        // The grid has to resolve the first sidelobe or the descent to the null walks straight over it,
+        // so this reads on the 2^18-point grid that characterization uses rather than the design grid.
+        constexpr std::size_t grid   = 1UZ << 18;
+        constexpr double      cutoff = 0.25;
+
+        const std::vector<float> taps = lowpass(1023UZ, cutoff, {Type::FlatTop, std::numeric_limits<double>::quiet_NaN()});
+        std::vector<double>      mag;
+        halfResponse(taps, mag, grid);
+
+        std::size_t firstNull = static_cast<std::size_t>(cutoff * static_cast<double>(grid));
+        while (firstNull + 1UZ < mag.size() && mag[firstNull + 1UZ] < mag[firstNull]) {
+            ++firstNull;
+        }
+        double worst = 0.0;
+        for (std::size_t i = firstNull; i < mag.size(); ++i) {
+            worst = std::max(worst, mag[i]);
+        }
+
+        const double measured = -20.0 * std::log10(worst);
+        expect(approx(measured, windowFigures(Type::FlatTop).attenuationDb, 0.3)) << "FlatTop at 1023 taps delivers " << measured << " dB against a tabled " << windowFigures(Type::FlatTop).attenuationDb;
+    };
+
     "the tap-count estimate and the search pin each other"_test = [] {
         // Kaiser's estimate marks where a design first touches its target. These are the measured
         // shortfalls, pinned rather than asserted away: a future improvement to the estimator

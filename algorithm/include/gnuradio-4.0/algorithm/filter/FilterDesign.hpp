@@ -127,7 +127,7 @@ struct WindowFigures {
     case Hamming: return {3.319, 53.40};
     case Parzen: return {7.860, 56.64};
     case Blackman: return {5.593, 75.29};
-    case FlatTop: return {9.150, 94.70};
+    case FlatTop: return {9.150, 95.70};
     case BlackmanHarris: return {7.838, 109.29};
     case Nuttall: return {7.757, 111.96};
     case BlackmanNuttall: return {7.819, 114.90};

@@ -11,6 +11,7 @@
 
 #include <gnuradio-4.0/meta/formatter.hpp>
 
+#include <gnuradio-4.0/algorithm/filter/FilterDesign.hpp>
 #include <gnuradio-4.0/algorithm/fourier/fft.hpp>
 #include <gnuradio-4.0/algorithm/fourier/fft_common.hpp>
 #include <gnuradio-4.0/algorithm/fourier/window.hpp>
@@ -634,6 +635,13 @@ const boost::ut::suite<"FFT algorithms and window functions"> windowTests = [] {
             expect(approx(windowMetrics::coherentGain(window), row.coherentGain, 1e-4)) << std::format("{} coherent gain", label);
             expect(approx(windowMetrics::peakSidelobeDb(window, nFft), row.peakSidelobeDb, dbTolerance)) << std::format("{} peak sidelobe level", label);
             expect(approx(windowMetrics::stopbandAttenuationDb(window, nFft), row.attenuationDb, dbTolerance)) << std::format("{} windowed-sinc stopband attenuation", label);
+
+            // The FIR design header states the same attenuation for the windows whose shape is fixed, and
+            // designs lengths from it. Nothing else reads the two tables against each other, and they are
+            // written independently, so a row that drifts from the other is caught here.
+            if (std::isnan(row.param) && row.window != Exponential) {
+                expect(approx(gr::filter::fir::design::windowFigures(row.window).attenuationDb, row.attenuationDb, dbTolerance)) << std::format("{} attenuation as the FIR design header tables it", label);
+            }
         }
     };
 
