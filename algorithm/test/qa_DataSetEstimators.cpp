@@ -717,6 +717,21 @@ const boost::ut::suite<"DataSet<T> filter"> _dataSetFilter = [] {
         expect(eq(ds.signal_values[4], T(5)));
         expect(eq(ds.signal_values[5], T(5))); // window is {5, 0}    min=0, max=5 => ramge = 5
     } | std::tuple<float, double>{};
+
+    "applySymmetricFilter"_test = []<typename T>() {
+        using value_t = gr::meta::fundamental_base_value_type_t<T>;
+        // The zero-phase form is the forward pass and the backward pass averaged. A two-tap mean over a
+        // leading impulse reads {0.5, 0.5, 0, 0} forwards and {0.5, 0, 0, 0} backwards, so the record
+        // comes back as the mean of the two.
+        const gr::filter::FilterCoefficients<value_t> twoTap{.b = {value_t(0.5), value_t(0.5)}, .a = {value_t(1)}};
+
+        auto ds = filter::applySymmetricFilter(generate::from<T>("impulse", std::vector<value_t>{1, 0, 0, 0}), twoTap);
+
+        const std::vector<value_t> expected{value_t(0.5), value_t(0.25), value_t(0), value_t(0)};
+        for (std::size_t i = 0UZ; i < expected.size(); ++i) {
+            expect(approx(gr::value(ds.signal_values[i]), expected[i], value_t(1e-6))) << std::format("zero-phase filter at index {}", i);
+        }
+    } | std::tuple<float, double>{};
 };
 
 #pragma GCC diagnostic pop
