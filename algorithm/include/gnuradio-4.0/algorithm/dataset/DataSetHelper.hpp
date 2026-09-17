@@ -3,6 +3,8 @@
 
 #include <expected>
 
+#include <gnuradio-4.0/algorithm/math/UncertainValue.hpp>
+
 namespace gr::dataset {
 namespace dim {
 // N.B. explicitly and individually defined indices, rather than enum class
