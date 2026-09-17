@@ -199,10 +199,12 @@ const boost::ut::suite<"DataSet<T> estimator"> _qaDataSetEstimators = [] {
         expect(approx(estimators::computeFWHM(data, 2), T(4), T(1e-5)));
         expect(approx(estimators::computeInterpolatedFWHM(data, 2), T(3), T(1e-5)));
 
+        // the triangle is zero at both ends, so the minimum's index is the first of the two, as the
+        // maximum's is the first of two equal peaks
         expect(eq(estimators::getMaximum(ds, 0UZ, nSamples).value().index, 5UZ));
-        expect(eq(estimators::getMinimum(ds, 0UZ, nSamples).value().index, 10UZ));
+        expect(eq(estimators::getMinimum(ds, 0UZ, nSamples).value().index, 0UZ));
         expect(eq(estimators::getMaximum(ds).value().index, 5UZ));
-        expect(eq(estimators::getMinimum(ds).value().index, 10UZ));
+        expect(eq(estimators::getMinimum(ds).value().index, 0UZ));
 
         expect(eq(gr::value(estimators::getMaximum(ds, 0UZ, nSamples).value().value), value_t(1)));
         expect(eq(gr::value(estimators::getMaximum(ds).value().value), value_t(1)));
@@ -236,6 +238,29 @@ const boost::ut::suite<"DataSet<T> estimator"> _qaDataSetEstimators = [] {
         expect(approx(estimators::getEdgeDetect(ds), T(3), T(0.5))) << "50% is ~ 0.5 => crossing near i=3";
     } | std::tuple<float, double, gr::UncertainValue<float>, gr::UncertainValue<double>>{};
     ;
+
+    // A record whose minimum is neither at an end nor at the last sample: the index has to come from the
+    // comparison. A triangle, which is what the estimators are otherwise read with, cannot tell the two
+    // apart, its minimum sitting at both ends.
+    "the minimum is reported where the minimum is"_test = []<typename T = double> {
+        using value_t = gr::meta::fundamental_base_value_type_t<T>;
+        auto ds       = generate::from<T>("interior minimum", std::vector<value_t>{5, 2, -3, 4, 1});
+
+        const auto minimum = estimators::getMinimum(ds);
+        expect(eq(minimum.value().index, 2UZ));
+        expect(eq(gr::value(minimum.value().value), value_t(-3)));
+        expect(eq(ds.timing_events[0UZ].back().first, std::ptrdiff_t(2))) << "the annotation marks the sample the minimum was found at";
+
+        expect(eq(estimators::getMaximum(ds).value().index, 0UZ));
+        expect(eq(gr::value(estimators::getMaximum(ds).value().value), value_t(5)));
+
+        expect(eq(estimators::getMinimum(ds, 3UZ, 5UZ).value().index, 4UZ)) << "a range that excludes the minimum reports the range's own";
+        expect(eq(gr::value(estimators::getMinimum(ds, 3UZ, 5UZ).value().value), value_t(1)));
+
+        auto withGaps = generate::from<T>("infinite tail", std::vector<value_t>{4, -2, 3, std::numeric_limits<value_t>::quiet_NaN(), std::numeric_limits<value_t>::infinity()});
+        expect(eq(estimators::getMinimum(withGaps).value().index, 1UZ)) << "the last finite sample is not the minimum";
+        expect(eq(gr::value(estimators::getMinimum(withGaps).value().value), value_t(-2)));
+    } | std::tuple<float, double, gr::UncertainValue<float>, gr::UncertainValue<double>>{};
 
     // the half that a median or a trapezoid takes lives in the accumulator, so an integral sample type keeps it up to the return
     "median and integral of an integral sample type"_test = [] {

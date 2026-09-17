@@ -157,9 +157,9 @@ template<MetaInfo mode = MetaInfo::Apply, DataSetLike D, typename T = typename s
     T   minVal = +std::numeric_limits<TValue>::max();
     int locMin = -1;
     for (std::size_t i = indexMin; i < indexMax; i++) {
-        if (T actual = gr::dataset::getIndexValue(dataSet, dim::Y, i, signalIndex); gr::math::isfinite(actual)) {
+        if (T actual = gr::dataset::getIndexValue(dataSet, dim::Y, i, signalIndex); gr::math::isfinite(actual) && actual < minVal) {
+            minVal = actual;
             locMin = static_cast<int>(i);
-            minVal = std::min(minVal, actual);
         }
     }
     if constexpr (!isConstDataSet && mode == MetaInfo::Apply) {
