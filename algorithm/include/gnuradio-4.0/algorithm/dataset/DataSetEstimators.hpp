@@ -75,6 +75,8 @@ template<typename T>
     return com / mass;
 }
 
+/// @brief The width in samples of the peak at @p index, read where each flank falls to half its height;
+/// NaN where either flank reaches the end of @p data still above half maximum.
 template<std::ranges::random_access_range T, typename TValue = gr::meta::fundamental_base_value_type_t<T>>
 [[nodiscard]] constexpr TValue computeFWHM(const T& data, std::size_t index) {
     using value_t = gr::meta::fundamental_base_value_type_t<TValue>; // innermost value
@@ -87,15 +89,17 @@ template<std::ranges::random_access_range T, typename TValue = gr::meta::fundame
     for (upperLimit = index; upperLimit < data.size() && data[upperLimit] > maxHalf; upperLimit++) {
         // done in condition
     }
-    for (lowerLimit = index; data[lowerLimit] > maxHalf; lowerLimit--) {
+    for (lowerLimit = index; lowerLimit > 0UZ && data[lowerLimit] > maxHalf; lowerLimit--) {
         // done in condition
     }
-    if (upperLimit >= data.size()) {
+    if (upperLimit >= data.size() || data[lowerLimit] > maxHalf) {
         return std::numeric_limits<TValue>::quiet_NaN();
     }
     return static_cast<TValue>(upperLimit - lowerLimit);
 }
 
+/// @copydoc computeFWHM
+/// The two crossings are refined by linear interpolation between the samples they fall between.
 template<std::ranges::random_access_range T, typename TValue = typename T::value_type>
 [[nodiscard]] constexpr TValue computeInterpolatedFWHM(const T& data, std::size_t index) {
     using value_t = gr::meta::fundamental_base_value_type_t<TValue>; // innermost value
@@ -108,10 +112,10 @@ template<std::ranges::random_access_range T, typename TValue = typename T::value
     for (upperLimit = index; upperLimit < data.size() && data[upperLimit] > maxHalf; upperLimit++) {
         // done in condition
     }
-    for (lowerLimit = index; data[lowerLimit] > maxHalf; lowerLimit--) {
+    for (lowerLimit = index; lowerLimit > 0UZ && data[lowerLimit] > maxHalf; lowerLimit--) {
         // done in condition
     }
-    if (upperLimit >= data.size()) {
+    if (upperLimit >= data.size() || data[lowerLimit] > maxHalf) {
         return std::numeric_limits<TValue>::quiet_NaN();
     }
     TValue lowerRefined = detail::linearInterpolate(value_t(lowerLimit), value_t(lowerLimit + 1), data[lowerLimit], data[lowerLimit + 1], maxHalf);
