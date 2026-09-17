@@ -373,9 +373,12 @@ DataSet<T> applyFilter(D&& dataSet, const gr::filter::FilterCoefficients<U>& coe
     return smoothed;
 }
 
-template<ProcessMode Mode = ProcessMode::Copy, typename T, typename... TFilterCoefficients>
-DataSet<T> applySymmetricFilter(const DataSet<T>& ds, TFilterCoefficients&&... coeffs) {
-    return applyFilter<Mode, true>(ds, 0UZ, std::forward<TFilterCoefficients>(coeffs)...);
+/// @brief `applyFilter` in its zero-phase form: the record filtered forwards, filtered backwards, and the
+/// two passes averaged. @p args are `applyFilter`'s own beyond the record: the coefficients, and the signal
+/// index where only one signal is to be filtered.
+template<ProcessMode Mode = ProcessMode::Copy, DataSetLike D, typename T = typename std::remove_cvref_t<D>::value_type, typename... TArgs>
+DataSet<T> applySymmetricFilter(D&& dataSet, TArgs&&... args) {
+    return applyFilter<Mode, true>(std::forward<D>(dataSet), std::forward<TArgs>(args)...);
 }
 
 } // namespace filter
