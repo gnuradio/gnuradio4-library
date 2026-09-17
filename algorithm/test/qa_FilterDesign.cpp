@@ -196,6 +196,30 @@ const boost::ut::suite<"FIR lowpass design"> filterDesignTests = [] {
         expect(that % signChanges) << "halfAmplitude keeps the sign halfResponse throws away";
     };
 
+    "a tap set of no taps reads back as zero"_test = [] {
+        // The center tap is what the grid is filled with before the cosine terms are added, so a tap
+        // set of no taps is the one input that would be read past the end. Its reading is zero
+        // everywhere, which is what the sine sum already gives an empty tap set.
+        const std::vector<float> nothing;
+
+        std::vector<double> amp;
+        halfAmplitude(nothing, amp);
+        expect(eq(amp.size(), kDesignGrid / 2UZ + 1UZ)) << "the grid is the grid, whatever the tap set";
+        expect(that % std::ranges::all_of(amp, [](double v) { return v == 0.0; })) << "no taps, no amplitude anywhere";
+
+        std::vector<double> mag;
+        halfResponse(nothing, mag);
+        std::vector<double> odd;
+        halfResponseOdd(nothing, odd);
+        expect(that % identical(mag, amp));
+        expect(that % identical(mag, odd)) << "the cosine sum and the sine sum agree on an empty tap set";
+
+        std::vector<double> coarse;
+        halfAmplitude(nothing, coarse, 64UZ);
+        expect(eq(coarse.size(), 33UZ));
+        expect(eq(amplitudeAt(std::vector<double>{}, 0.25), 0.0)) << "the one-frequency reading says the same";
+    };
+
     "normalizeAt puts the stated gain at the stated frequency"_test = [] {
         for (const double gain : {1.0, 0.5, 1000.0}) {
             std::vector<double> taps(31UZ, 0.0);

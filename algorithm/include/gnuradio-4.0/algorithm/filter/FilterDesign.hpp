@@ -284,14 +284,21 @@ template<std::size_t Capacity, typename Key, typename Value>
  *
  * The index step is taken modulo the grid by mask, so the grid must be a power of two, and one that is not
  * is refused.
+ *
+ * A tap set of no taps has no center tap to read and no amplitude anywhere: the result is the grid
+ * filled with zero, which is the reading `halfResponseOdd` already gives an empty tap set.
  */
 inline void halfAmplitude(const std::vector<float>& taps, std::vector<double>& amp, std::size_t grid = kDesignGrid) {
     if (grid == 0UZ || (grid & (grid - 1UZ)) != 0UZ) {
         throw std::invalid_argument(std::format("FilterDesign: the index step is taken modulo the grid by mask, so the grid must be a power of two, got {}", grid));
     }
     const std::size_t n    = taps.size();
-    const std::size_t mid  = n == 0UZ ? 0UZ : (n - 1UZ) / 2UZ;
     const std::size_t half = grid / 2UZ;
+    if (n == 0UZ) {
+        amp.assign(half + 1UZ, 0.0);
+        return;
+    }
+    const std::size_t mid = (n - 1UZ) / 2UZ;
     amp.assign(half + 1UZ, static_cast<double>(taps[mid]));
 
     const std::shared_ptr<const std::vector<double>> table = detail::cosineTable(grid);
