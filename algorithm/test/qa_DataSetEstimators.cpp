@@ -262,6 +262,20 @@ const boost::ut::suite<"DataSet<T> estimator"> _qaDataSetEstimators = [] {
         expect(eq(gr::value(estimators::getMinimum(withGaps).value().value), value_t(-2)));
     } | std::tuple<float, double, gr::UncertainValue<float>, gr::UncertainValue<double>>{};
 
+    // A peak whose left flank is still above half maximum at the first sample: the descending scan has
+    // to stop there, and the width is as undefined as it is when the ascending scan reaches the last.
+    "a flank that never falls to half maximum has no width"_test = []<typename T = double> {
+        const std::vector<T> leftEdge{T(10), T(9), T(4), T(1)};
+        expect(!gr::math::isfinite(estimators::computeFWHM(leftEdge, 1UZ))) << "the left flank runs off the front";
+        expect(!gr::math::isfinite(estimators::computeInterpolatedFWHM(leftEdge, 1UZ)));
+
+        const std::vector<T> rightEdge{T(1), T(4), T(9), T(10)};
+        expect(!gr::math::isfinite(estimators::computeFWHM(rightEdge, 2UZ))) << "and the right flank off the back";
+
+        const std::vector<T> peak{T(0), T(1), T(10), T(1), T(0)};
+        expect(approx(estimators::computeFWHM(peak, 2UZ), T(2), T(1e-5))) << "a peak with both flanks inside the record still reads";
+    } | std::tuple<float, double>{};
+
     // the half that a median or a trapezoid takes lives in the accumulator, so an integral sample type keeps it up to the return
     "median and integral of an integral sample type"_test = [] {
         static_assert(std::is_same_v<estimators::PromotedAccumulator<int>, double>);
