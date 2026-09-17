@@ -732,6 +732,38 @@ const boost::ut::suite<"DataSet<T> filter"> _dataSetFilter = [] {
             expect(approx(gr::value(ds.signal_values[i]), expected[i], value_t(1e-6))) << std::format("zero-phase filter at index {}", i);
         }
     } | std::tuple<float, double>{};
+
+    "ProcessMode::InPlace works on the record it is given"_test = []<typename T>() {
+        using value_t = gr::meta::fundamental_base_value_type_t<T>;
+        // In place means the record that comes back is the record that went in: its sample buffer is the
+        // one the caller handed over, not a copy of it.
+        auto movesTheBuffer = [](auto&& op) {
+            auto       ds     = generate::from<T>("in place", std::vector<value_t>{3, 3, 4, 3, 3, 4, 3, 3});
+            const auto buffer = ds.signal_values.data();
+            auto       out    = op(std::move(ds));
+            return out.signal_values.data() == buffer;
+        };
+        expect(that % movesTheBuffer([](auto&& in) { return gr::dataset::addNoise<ProcessMode::InPlace>(std::move(in), value_t(0.1), 0UZ, 42U); })) << "addNoise";
+        expect(that % movesTheBuffer([](auto&& in) { return filter::applyMovingAverage<ProcessMode::InPlace>(std::move(in), 3UZ); })) << "applyMovingAverage";
+        expect(that % movesTheBuffer([](auto&& in) { return filter::applyMedian<ProcessMode::InPlace>(std::move(in), 3UZ); })) << "applyMedian";
+        expect(that % movesTheBuffer([](auto&& in) { return filter::applyRms<ProcessMode::InPlace>(std::move(in), 3UZ); })) << "applyRms";
+        expect(that % movesTheBuffer([](auto&& in) { return filter::applyPeakToPeak<ProcessMode::InPlace>(std::move(in), 3UZ); })) << "applyPeakToPeak";
+
+        // and the answer is the one the copying mode gives: a window that reads samples the pass has
+        // already written would differ from it as soon as the pass writes into its own input
+        auto       source  = generate::ramp<T>("ramp", 5, value_t(0), value_t(1));
+        const auto viaCopy = filter::applyMovingAverage<ProcessMode::Copy>(source, 3UZ);
+        const auto inPlace = filter::applyMovingAverage<ProcessMode::InPlace>(std::move(source), 3UZ);
+        for (std::size_t i = 0UZ; i < viaCopy.signal_values.size(); ++i) {
+            expect(eq(inPlace.signal_values[i], viaCopy.signal_values[i])) << std::format("moving average at index {}", i);
+        }
+
+        auto       kept   = generate::from<T>("kept", std::vector<value_t>{3, 3, 4, 3, 3, 4, 3, 3});
+        const auto buffer = kept.signal_values.data();
+        const auto copied = filter::applyMedian<ProcessMode::Copy>(kept, 3UZ);
+        expect(neq(copied.signal_values.data(), buffer)) << "the copying mode leaves the caller's record where it was";
+        expect(eq(kept.signal_values[2], T(4))) << "and unfiltered";
+    } | std::tuple<float, double>{};
 };
 
 #pragma GCC diagnostic pop

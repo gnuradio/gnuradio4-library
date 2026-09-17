@@ -142,8 +142,9 @@ std::vector<T> computeDerivative(const DataSet<T>& ds, std::size_t signalIndex =
     return derivative;
 }
 
-template<ProcessMode mode = ProcessMode::Copy, typename T, typename TValue = gr::meta::fundamental_base_value_type_t<T>>
-DataSet<T> addNoise(const DataSet<T>& ds, TValue noiseLevel, std::size_t signalIndex = 0UZ, std::uint64_t seed = 0U) {
+template<ProcessMode mode = ProcessMode::Copy, DataSetLike D, typename T = typename std::remove_cvref_t<D>::value_type, typename TValue = gr::meta::fundamental_base_value_type_t<T>>
+DataSet<T> addNoise(D&& ds, TValue noiseLevel, std::size_t signalIndex = 0UZ, std::uint64_t seed = 0U) {
+    static_assert(!(std::is_const_v<std::remove_reference_t<D>> && mode == ProcessMode::InPlace), "cannot perform in-place computation on const DataSet<T>");
     if (noiseLevel < TValue(0)) {
         throw gr::exception(std::format("noiseLevel {} must be a positive number.", noiseLevel));
     }
@@ -154,7 +155,6 @@ DataSet<T> addNoise(const DataSet<T>& ds, TValue noiseLevel, std::size_t signalI
     } else { // or move (in-place)
         noisy = std::move(ds);
     }
-    const auto         signal      = ds.signalValues(signalIndex);
     auto               noisySignal = noisy.signalValues(signalIndex);
     std::random_device rd;
     std::mt19937_64    rng(seed == 0 ? rd() : seed);
@@ -162,7 +162,7 @@ DataSet<T> addNoise(const DataSet<T>& ds, TValue noiseLevel, std::size_t signalI
 
     Distribution dist(-noiseLevel, +noiseLevel);
 
-    for (std::size_t i = 0UZ; i < signal.size(); ++i) {
+    for (std::size_t i = 0UZ; i < noisySignal.size(); ++i) {
         noisySignal[i] += dist(rng);
     }
     return noisy;
@@ -170,8 +170,9 @@ DataSet<T> addNoise(const DataSet<T>& ds, TValue noiseLevel, std::size_t signalI
 
 namespace filter {
 
-template<ProcessMode mode = ProcessMode::Copy, typename T, typename TValue = gr::meta::fundamental_base_value_type_t<T>>
-DataSet<T> applyMovingAverage(const DataSet<T>& ds, std::size_t windowSize, std::size_t signalIndex = 0UZ) {
+template<ProcessMode mode = ProcessMode::Copy, DataSetLike D, typename T = typename std::remove_cvref_t<D>::value_type, typename TValue = gr::meta::fundamental_base_value_type_t<T>>
+DataSet<T> applyMovingAverage(D&& ds, std::size_t windowSize, std::size_t signalIndex = 0UZ) {
+    static_assert(!(std::is_const_v<std::remove_reference_t<D>> && mode == ProcessMode::InPlace), "cannot perform in-place computation on const DataSet<T>");
     if (windowSize == 0 || !(windowSize & 1)) {
         throw gr::exception("windowSize must be a positive odd number.");
     }
@@ -182,8 +183,9 @@ DataSet<T> applyMovingAverage(const DataSet<T>& ds, std::size_t windowSize, std:
     } else { // or move (in-place)
         smoothed = std::move(ds);
     }
-    const auto signal         = ds.signalValues(signalIndex);
-    auto       smoothedSignal = smoothed.signalValues(signalIndex);
+    // the window reads samples the pass has already written, so it reads them from a copy taken first
+    const std::vector<T> signal{smoothed.signalValues(signalIndex).begin(), smoothed.signalValues(signalIndex).end()};
+    auto                 smoothedSignal = smoothed.signalValues(signalIndex);
 
     const std::size_t halfWindow = windowSize / 2UZ;
     for (std::size_t i = 0UZ; i < signal.size(); ++i) {
@@ -196,8 +198,9 @@ DataSet<T> applyMovingAverage(const DataSet<T>& ds, std::size_t windowSize, std:
     return smoothed;
 }
 
-template<ProcessMode mode = ProcessMode::Copy, typename T, typename TValue = gr::meta::fundamental_base_value_type_t<T>>
-constexpr DataSet<T> applyMedian(const DataSet<T>& ds, std::size_t windowSize, std::size_t signalIndex = 0UZ, std::source_location location = std::source_location::current()) {
+template<ProcessMode mode = ProcessMode::Copy, DataSetLike D, typename T = typename std::remove_cvref_t<D>::value_type, typename TValue = gr::meta::fundamental_base_value_type_t<T>>
+constexpr DataSet<T> applyMedian(D&& ds, std::size_t windowSize, std::size_t signalIndex = 0UZ, std::source_location location = std::source_location::current()) {
+    static_assert(!(std::is_const_v<std::remove_reference_t<D>> && mode == ProcessMode::InPlace), "cannot perform in-place computation on const DataSet<T>");
     if (windowSize == 0) {
         throw gr::exception(std::format("windowSize: {} must be a positive number.", windowSize), location);
     }
@@ -237,8 +240,9 @@ constexpr DataSet<T> applyMedian(const DataSet<T>& ds, std::size_t windowSize, s
     return filtered;
 }
 
-template<ProcessMode mode = ProcessMode::Copy, typename T, typename TValue = gr::meta::fundamental_base_value_type_t<T>>
-constexpr DataSet<T> applyRms(const DataSet<T>& ds, std::size_t windowSize, std::size_t signalIndex = 0UZ, std::source_location location = std::source_location::current()) {
+template<ProcessMode mode = ProcessMode::Copy, DataSetLike D, typename T = typename std::remove_cvref_t<D>::value_type, typename TValue = gr::meta::fundamental_base_value_type_t<T>>
+constexpr DataSet<T> applyRms(D&& ds, std::size_t windowSize, std::size_t signalIndex = 0UZ, std::source_location location = std::source_location::current()) {
+    static_assert(!(std::is_const_v<std::remove_reference_t<D>> && mode == ProcessMode::InPlace), "cannot perform in-place computation on const DataSet<T>");
     if (windowSize == 0UZ) {
         throw gr::exception(std::format("windowSize: {} must be a positive number.", windowSize), location);
     }
@@ -276,8 +280,9 @@ constexpr DataSet<T> applyRms(const DataSet<T>& ds, std::size_t windowSize, std:
     return filtered;
 }
 
-template<ProcessMode mode = ProcessMode::Copy, typename T, typename TValue = gr::meta::fundamental_base_value_type_t<T>>
-constexpr DataSet<T> applyPeakToPeak(const DataSet<T>& ds, std::size_t windowSize, std::size_t signalIndex = 0UZ, std::source_location location = std::source_location::current()) {
+template<ProcessMode mode = ProcessMode::Copy, DataSetLike D, typename T = typename std::remove_cvref_t<D>::value_type, typename TValue = gr::meta::fundamental_base_value_type_t<T>>
+constexpr DataSet<T> applyPeakToPeak(D&& ds, std::size_t windowSize, std::size_t signalIndex = 0UZ, std::source_location location = std::source_location::current()) {
+    static_assert(!(std::is_const_v<std::remove_reference_t<D>> && mode == ProcessMode::InPlace), "cannot perform in-place computation on const DataSet<T>");
     if (windowSize == 0UZ) {
         throw gr::exception(std::format("windowSize: {} must be a positive number.", windowSize), location);
     }
