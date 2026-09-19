@@ -6,6 +6,7 @@
 #include <format>
 #include <gnuradio-4.0/Block.hpp>
 #include <gnuradio-4.0/algorithm/fileio/FileIo.hpp>
+#include <gnuradio-4.0/thread/thread_pool.hpp>
 
 #ifndef __EMSCRIPTEN__
 #include <httplib.h>
@@ -321,6 +322,50 @@ const boost::ut::suite<"FileIO local - Native + Emscripten"> fileIoLocalTests = 
             expect(eq(std::string{}, joinBytesToString(subResults.allData)));
         }
         std::println("FileIO - Local - file not found end");
+    };
+
+    "FileIO - Local - cancel ends a reader nothing drains"_test = [&] {
+        using namespace std::chrono_literals;
+        std::println("FileIO - Local - cancel ends a reader nothing drains begin");
+
+        // A block that owns a Reader stops polling it the moment its graph stops. The reader is then
+        // inside a publish on a full ring, and only the cancel gets it out; without that it holds an
+        // io-pool worker for the life of the process.
+        namespace fs                 = std::filesystem;
+        const std::string uri        = "file:/tmp/gr4_fileio_test/TestFileIoCancelUndrained.bin";
+        const std::string localPath  = fileio::detail::toLocalPath(uri).value();
+        const std::size_t fileBytes  = 1UZ << 20;
+        const std::size_t chunkBytes = 64UZ;
+        fs::create_directories(fs::path{localPath}.parent_path());
+        {
+            std::ofstream out(localPath, std::ios::binary);
+            expect(out.is_open());
+            const std::vector<char> zeros(fileBytes, '\0');
+            out.write(zeros.data(), static_cast<std::streamsize>(zeros.size()));
+        }
+
+        const auto        ioPool   = gr::thread_pool::Manager::defaultIoPool();
+        const std::size_t baseline = ioPool->numTasksRunning();
+
+        auto readerExp = fileio::readAsync(uri, fileio::ReaderConfig{.chunkBytes = chunkBytes, .bufferMinSize = 4UZ});
+        expect(readerExp.has_value());
+        if (readerExp.has_value()) {
+            auto reader = std::move(readerExp.value());
+            std::this_thread::sleep_for(100ms);
+            expect(ge(ioPool->numTasksRunning(), baseline + 1UZ)) << "the reader still holds a worker while its ring is full";
+
+            reader.cancel();
+            const auto deadline = std::chrono::steady_clock::now() + 5s;
+            while (ioPool->numTasksRunning() > baseline && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(1ms);
+            }
+            expect(eq(ioPool->numTasksRunning(), baseline)) << "a canceled reader releases its worker";
+        }
+
+        std::error_code ec;
+        fs::remove(localPath, ec);
+        expect(!ec);
+        std::println("FileIO - Local - cancel ends a reader nothing drains end");
     };
 
     "FileIO - Writer local overwrite + append"_test = [&] {
