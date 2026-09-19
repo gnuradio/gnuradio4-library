@@ -9,9 +9,9 @@
 #include <vector>
 
 #include <gnuradio-4.0/HistoryBuffer.hpp>
-#include <gnuradio-4.0/SVD.hpp>
 #include <gnuradio-4.0/Tensor.hpp>
-#include <gnuradio-4.0/TensorMath.hpp>
+#include <gnuradio-4.0/algorithm/math/SVD.hpp>
+#include <gnuradio-4.0/algorithm/math/TensorMath.hpp>
 #include <gnuradio-4.0/meta/utils.hpp>
 
 namespace gr::algorithm::savitzky_golay {
