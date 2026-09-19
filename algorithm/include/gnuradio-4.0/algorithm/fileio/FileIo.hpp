@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
@@ -104,6 +105,9 @@ namespace gr::algorithm::fileio {
 namespace detail {
 inline constexpr std::string_view kMessageDataKey      = "data";
 inline constexpr std::size_t      defaultMinBufferSize = 1024uz;
+// how long a publisher sleeps between attempts on a full ring: short enough that a consumer which is
+// draining loses no measurable throughput, long enough that one which has stopped costs no core
+inline constexpr std::chrono::milliseconds kPublishRetryPeriod{1};
 } // namespace detail
 
 struct ReaderConfig {
@@ -180,7 +184,8 @@ public:
 
     // Note for Emscripten: we do a "soft" cancel. emscripten_fetch_close() is not reliably
     // usable from another thread, so cancellation is best-effort and not immediate.
-    // A final message (either success or error) will always be published.
+    // A final message (either success or error) reaches a consumer that is still draining the ring;
+    // a canceled reader whose ring stays full drops what it was publishing and ends.
     void cancel() {
         if (_state != nullptr) {
             _state->cancelRequested.store(true, std::memory_order_release);
@@ -298,15 +303,26 @@ public:
 };
 
 // `push*` methods take raw pointer to `ReadState` to satisfy Emscripten’s interface and unify the API across implementations.
+// The ring this publishes into is drained by the consumer that holds the Reader, and a consumer
+// stops draining the moment its own work stops. A blocking reserve() on a full ring would then wait
+// for a slot nothing frees and this task would never return, so the wait is taken in slices and a
+// canceled reader drops the message it was holding and returns.
 inline void publishMessage(ReaderState* state, gr::Message&& m) {
     if (state == nullptr) {
         return;
     }
 
-    {
-        auto span = state->bufferWriter.template reserve<gr::SpanReleasePolicy::ProcessNone>(1);
-        span[0]   = std::move(m);
-        span.publish(1);
+    while (true) {
+        auto span = state->bufferWriter.template tryReserve<gr::SpanReleasePolicy::ProcessNone>(1);
+        if (!span.empty()) {
+            span[0] = std::move(m);
+            span.publish(1);
+            break;
+        }
+        if (state->cancelRequested.load(std::memory_order_acquire)) {
+            return;
+        }
+        std::this_thread::sleep_for(detail::kPublishRetryPeriod);
     }
     state->updateCounter.fetch_add(1, std::memory_order_release);
     state->updateCounter.notify_all();
