@@ -1,4 +1,7 @@
 #include <boost/ut.hpp>
+
+#include <numbers>
+
 #include <gnuradio-4.0/meta/UnitTestHelper.hpp>
 #include <gnuradio-4.0/meta/formatter.hpp>
 
