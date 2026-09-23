@@ -37,9 +37,11 @@
  *
  * The decoder is Berlekamp-Massey for the error locator, a Chien search for its roots and
  * Forney's formula for the magnitudes, with the field's logarithm and antilogarithm tables
- * carrying every multiplication. Erasures are not supported: no consumer knows which symbols
- * are doubtful in the sense the erasure path needs, and the code that is not written cannot
- * be the code that is wrong.
+ * carrying every multiplication. `decodeWithErasures` also takes the positions of erased
+ * symbols, such as the least reliable symbols a soft-decision demodulator marks. The product of
+ * `(1 + X x)` over the erased symbols, `X = beta^d` for the symbol at power `d`, seeds
+ * Berlekamp-Massey, which extends it by the error locator, and a word is corrected whenever
+ * twice its errors plus its erasures is at most R. `decode` is the same decoder with no erasures.
  *
  * **Where the generator's roots start, and how far apart they are.** A Reed-Solomon code is fixed
  * by its field and by the `Roots` consecutive powers its generator vanishes at, and two families
@@ -50,8 +52,8 @@
  * numbers are read straight off the product limits: `PrimitiveStep = 11` and
  * `FirstConsecutiveRoot = 128 - E`, which is 112 at `E = 16` and 120 at `E = 8`.
  *
- * Four places carry the two parameters and every one of them reduces to the plain expression at
- * `f = 1, PrimitiveStep = 1`: the generator's roots, the syndrome evaluation points, the Chien
+ * Five places carry the two parameters and every one of them reduces to the plain expression at
+ * `f = 1, PrimitiveStep = 1`: the generator's roots, the syndrome evaluation points, the erasure locator's `X`, the Chien
  * search's step, and Forney's magnitude, which gains the factor `X^(1-f)`. That factor is the one
  * that is easy to leave out, and leaving it out produces a decoder that locates errors correctly
  * and corrects them wrongly — caught here by the post-correction syndrome check, which then fails
@@ -203,7 +205,30 @@ struct ReedSolomon {
 
     /// Correct `block` in place. The first `pad` symbols are the shortening the air did not
     /// carry and must be zero on entry.
-    static RsResult decode(Block& block, std::size_t pad = 0UZ) noexcept {
+    static RsResult decode(Block& block, std::size_t pad = 0UZ) noexcept { return correct(block, {}, pad); }
+
+    /// Correct `block` in place, the symbols at the block indices in `erasures` taken as erased:
+    /// their positions are known and their values are not. `e` errors are corrected together with
+    /// the erasures whenever `2e + erasures.size() <= Roots`. The result's `errors` counts the
+    /// symbols changed, which leaves out an erased symbol that already held the transmitted value.
+    /// A position outside `[pad, kBlock)`, a position given twice or more than `Roots` positions is
+    /// refused: the result is not `valid` and `block` is untouched. No erasures is `decode`.
+    static RsResult decodeWithErasures(Block& block, std::span<const std::size_t> erasures, std::size_t pad = 0UZ) noexcept {
+        if (erasures.size() > Roots) {
+            return {};
+        }
+        std::array<bool, kBlock> named{};
+        for (const std::size_t position : erasures) {
+            if (position < pad || position >= kBlock || named[position]) {
+                return {};
+            }
+            named[position] = true;
+        }
+        return correct(block, erasures, pad);
+    }
+
+private:
+    static RsResult correct(Block& block, std::span<const std::size_t> erasures, std::size_t pad) noexcept {
         constexpr auto& gf = detail::kGf<SymbolBits, FieldPoly>;
         RsResult        result;
 
@@ -229,17 +254,26 @@ struct ReedSolomon {
             syndromeLog[i] = gf.log[syndrome[i]];
         }
 
-        // Berlekamp-Massey for the error locator.
+        // Berlekamp-Massey for the error locator, from the erasure locator.
         std::array<std::uint8_t, Roots + 1UZ> lambda{};
         std::array<std::uint8_t, Roots + 1UZ> back{};
         std::array<std::uint8_t, Roots + 1UZ> next{};
         lambda[0] = 1U;
+        for (std::size_t k = 0UZ; k < erasures.size(); ++k) {
+            const unsigned locator = modExp(PrimitiveStep * static_cast<unsigned>(kBlock - 1UZ - erasures[k]));
+            for (std::size_t j = k + 1UZ; j > 0UZ; --j) {
+                if (lambda[j - 1UZ] != 0U) {
+                    lambda[j] ^= gf.exp[modExp(locator + static_cast<unsigned>(gf.log[lambda[j - 1UZ]]))];
+                }
+            }
+        }
         for (std::size_t i = 0UZ; i <= Roots; ++i) {
             back[i] = gf.log[lambda[i]];
         }
 
-        std::size_t length = 0UZ;
-        for (std::size_t r = 1UZ; r <= Roots; ++r) {
+        const std::size_t erased = erasures.size();
+        std::size_t       length = erased;
+        for (std::size_t r = erased + 1UZ; r <= Roots; ++r) {
             std::uint8_t discrepancy = 0U;
             for (std::size_t i = 0UZ; i < r; ++i) {
                 if (lambda[i] != 0U && syndromeLog[r - i - 1UZ] != kLogZero) {
@@ -260,8 +294,8 @@ struct ReedSolomon {
             for (std::size_t i = 0UZ; i < Roots; ++i) {
                 next[i + 1UZ] = (back[i] != kLogZero) ? static_cast<std::uint8_t>(lambda[i + 1UZ] ^ gf.exp[modExp(discrepancyLog + back[i])]) : lambda[i + 1UZ];
             }
-            if (2UZ * length <= r - 1UZ) {
-                length = r - length;
+            if (2UZ * length <= r + erased - 1UZ) {
+                length = r + erased - length;
                 for (std::size_t i = 0UZ; i <= Roots; ++i) {
                     back[i] = (lambda[i] == 0U) ? kLogZero : static_cast<std::uint8_t>(modExp(static_cast<unsigned>(gf.log[lambda[i]]) + static_cast<unsigned>(kBlock) - discrepancyLog));
                 }
@@ -286,7 +320,7 @@ struct ReedSolomon {
             return result; // syndromes nonzero but no locator: not a correctable word
         }
 
-        // Chien search: beta^-i is a root of lambda exactly when symbol i is in error, so the
+        // Chien search: beta^-i is a root of lambda exactly when symbol i is in error or erased, so the
         // register steps by PrimitiveStep in the alpha exponent rather than by one.
         std::array<unsigned, Roots>       rootExp{};
         std::array<unsigned, Roots>       location{};
