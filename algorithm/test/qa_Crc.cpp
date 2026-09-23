@@ -89,6 +89,24 @@ constexpr Parameters kCatalog[] = {
     return ((p.resultReflected ? reverseBits(reg, p.width) : reg) ^ (p.finalXor & mask)) & mask;
 }
 
+/// The definition over the first `bitCount` bits of `message`, one bit at a time: most significant bit
+/// of each byte first, or least significant first for a reflected input.
+[[nodiscard]] std::uint64_t bitSerialBits(const Parameters& p, std::span<const std::uint8_t> message, std::size_t bitCount) {
+    const std::uint64_t mask = maskOf(p.width);
+    const std::uint64_t poly = p.polynomial & mask;
+    std::uint64_t       reg  = p.initialValue & mask;
+    for (std::size_t i = 0UZ; i < bitCount; ++i) {
+        const std::size_t   position = p.inputReflected ? i % 8UZ : 7UZ - i % 8UZ;
+        const std::uint64_t bit      = (static_cast<std::uint64_t>(message[i / 8UZ]) >> position) & 1ULL;
+        const std::uint64_t msb      = (reg >> (p.width - 1U)) & 1ULL;
+        reg                          = (reg << 1U) & mask;
+        if ((msb ^ bit) != 0ULL) {
+            reg ^= poly;
+        }
+    }
+    return ((p.resultReflected ? reverseBits(reg, p.width) : reg) ^ (p.finalXor & mask)) & mask;
+}
+
 /// Implementation B: the MSB-first table with a per-byte input reflection, which is the form the
 /// kernel deliberately does not use when the input is reflected. `width >= 8` only.
 [[nodiscard]] std::uint64_t msbFirstTable(const Parameters& p, std::span<const std::uint8_t> message) {
@@ -466,6 +484,62 @@ const boost::ut::suite<"crc"> crcTests = [] {
             broken[3]                        = static_cast<std::uint8_t>(broken[3] ^ 0x01U);
             expect(neq(crc.compute(broken), 0x0000ULL)) << p.name;
         }
+    };
+
+    "computeBits equals compute at every whole number of bytes"_test = [] {
+        const auto message = randomBytes(64UZ, 0xB17EULL);
+        for (const Parameters& p : kCatalog) {
+            const Crc   crc        = kernelOf(p);
+            std::size_t mismatches = 0UZ;
+            for (std::size_t bytes = 0UZ; bytes <= message.size(); ++bytes) {
+                mismatches += crc.computeBits(message, 8UZ * bytes) != crc.compute(std::span<const std::uint8_t>(message.data(), bytes)) ? 1UZ : 0UZ;
+            }
+            expect(eq(mismatches, 0UZ)) << std::format("{}: {} of {} whole-byte lengths differ", p.name, mismatches, message.size() + 1UZ);
+        }
+        expect(that % kCatalog[12].inputReflected) << "CRC-32/ISO-HDLC is the reflected control";
+        expect(eq(kernelOf(kCatalog[12]).computeBits(checkMessage(), 72UZ), kCatalog[12].check)) << "CRC-32/ISO-HDLC over \"123456789\" as 72 bits";
+        expect(that % !kCatalog[7].inputReflected) << "CRC-16/IBM-3740 is the unreflected control";
+        expect(eq(kernelOf(kCatalog[7]).computeBits(checkMessage(), 72UZ), kCatalog[7].check)) << "CRC-16/IBM-3740 over \"123456789\" as 72 bits";
+    };
+
+    "computeBits equals the bit-serial definition at every length that is not a whole number of bytes"_test = [] {
+        // The catalog holds widths below, at and above eight, each with reflected and unreflected input.
+        const auto message = randomBytes(40UZ, 0xB175ULL);
+        for (const Parameters& p : kCatalog) {
+            expect(eq(bitSerialBits(p, checkMessage(), 72UZ), p.check)) << std::format("{}: the bit-serial reference reproduces the published check value", p.name);
+            const Crc   crc        = kernelOf(p);
+            std::size_t lengths    = 0UZ;
+            std::size_t mismatches = 0UZ;
+            for (std::size_t bits = 1UZ; bits < 8UZ * message.size(); ++bits) {
+                if (bits % 8UZ == 0UZ) {
+                    continue;
+                }
+                ++lengths;
+                mismatches += crc.computeBits(message, bits) != bitSerialBits(p, message, bits) ? 1UZ : 0UZ;
+            }
+            expect(eq(mismatches, 0UZ)) << std::format("{} (width {}, input {}reflected): {} of {} lengths differ", p.name, p.width, p.inputReflected ? "" : "un", mismatches, lengths);
+        }
+    };
+
+    "computeBits reads no bit past bitCount and refuses a count the message cannot hold"_test = [] {
+        const auto message = randomBytes(13UZ, 0x77ULL);
+        for (const Parameters& p : kCatalog) {
+            const Crc crc = kernelOf(p);
+            for (const std::size_t bits : {77UZ, 82UZ, 101UZ}) {
+                auto flipped = message;
+                for (std::size_t i = bits; i < 8UZ * flipped.size(); ++i) {
+                    const std::size_t position = p.inputReflected ? i % 8UZ : 7UZ - i % 8UZ;
+                    flipped[i / 8UZ]           = static_cast<std::uint8_t>(flipped[i / 8UZ] ^ (1U << position));
+                }
+                expect(eq(crc.computeBits(flipped, bits), crc.computeBits(message, bits))) << std::format("{}: the bits past {} change the result", p.name, bits);
+            }
+        }
+
+        const Crc crc = kernelOf(kCatalog[12]);
+        expect(eq(crc.computeBits(std::span<const std::uint8_t>{}, 0UZ), crc.compute(std::span<const std::uint8_t>{}))) << "zero bits of an empty message";
+        expect(nothrow([&crc, &message] { (void)crc.computeBits(message, 8UZ * message.size()); }));
+        expect(throws([&crc, &message] { (void)crc.computeBits(message, 8UZ * message.size() + 1UZ); })) << "one bit more than the message holds";
+        expect(throws([&crc] { (void)crc.computeBits(std::span<const std::uint8_t>{}, 1UZ); })) << "one bit of an empty message";
     };
 };
 
