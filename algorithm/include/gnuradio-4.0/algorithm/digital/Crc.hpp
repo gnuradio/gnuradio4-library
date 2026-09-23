@@ -38,11 +38,14 @@
  * masked to `width` bits on every branch, so an over-wide polynomial cannot mean one thing reflected
  * and another not.
  *
- * The kernel is immutable after construction and `compute` is `const` and `noexcept`, so one instance
- * is safe to call concurrently. Each instance carries its own 2 KiB table by value.
+ * The kernel is immutable after construction. `compute` and `computeBits` are `const` and change
+ * nothing, so one instance is safe to call concurrently. Each instance carries its own 2 KiB table by
+ * value.
  *
- * The model is byte-oriented. A message that is not a whole number of bytes, and a CRC over a
- * non-byte-aligned bit field, are outside it and are not offered. `width` below 8 refers to the
+ * `compute` takes a message of whole bytes. `computeBits` takes a message of any whole number of bits,
+ * packed eight to a byte in the order the model reads a byte: most significant bit first when
+ * `inputReflected` is false, least significant bit first when it is true. It runs the whole bytes
+ * through the table and each remaining bit through the same register. `width` below 8 refers to the
  * register, not the message.
  */
 namespace gr::digital {
@@ -85,38 +88,24 @@ public:
         }
     }
 
-    [[nodiscard]] std::uint64_t compute(std::span<const std::uint8_t> message) const noexcept {
-        switch (_form) {
-        case TableForm::Mirrored: {
-            std::uint64_t reg = _seed;
-            for (const std::uint8_t byte : message) {
-                reg = _table[(reg ^ byte) & 0xFFULL] ^ (reg >> 8U);
-            }
-            return ((_inputReflected != _resultReflected ? detail::reverseBits(reg, _width) : reg) ^ _finalXor) & _mask;
+    [[nodiscard]] std::uint64_t compute(std::span<const std::uint8_t> message) const noexcept { return finish(feedBytes(_seed, message)); }
+
+    /// @brief The CRC of the first `bitCount` bits of `message`, packed as the file comment states.
+    ///
+    /// The bits of the last byte past `bitCount` are ignored. `computeBits(message, 8 * message.size())`
+    /// equals `compute(message)`. Throws `std::invalid_argument` when `message` holds fewer than `bitCount` bits.
+    [[nodiscard]] std::uint64_t computeBits(std::span<const std::uint8_t> message, std::size_t bitCount) const {
+        const std::size_t wholeBytes = bitCount / 8UZ;
+        const std::size_t extraBits  = bitCount % 8UZ;
+        if (wholeBytes + (extraBits != 0UZ ? 1UZ : 0UZ) > message.size()) {
+            throw std::invalid_argument("gr::digital::Crc: bitCount " + std::to_string(bitCount) + " exceeds the " + std::to_string(message.size()) + "-byte message");
         }
-        case TableForm::LeftAligned: {
-            std::uint64_t reg = _seed;
-            if (_inputReflected) {
-                for (const std::uint8_t byte : message) {
-                    reg = _table[(reg ^ reverseByte(byte)) & 0xFFULL];
-                }
-            } else {
-                for (const std::uint8_t byte : message) {
-                    reg = _table[(reg ^ byte) & 0xFFULL];
-                }
-            }
-            reg >>= 8U - _width;
-            return ((_resultReflected ? detail::reverseBits(reg, _width) : reg) ^ _finalXor) & _mask;
+        std::uint64_t reg = feedBytes(_seed, message.first(wholeBytes));
+        for (std::size_t k = 0UZ; k < extraBits; ++k) {
+            const std::size_t position = _inputReflected ? k : 7UZ - k;
+            reg                        = feedBit(reg, (static_cast<std::uint64_t>(message[wholeBytes]) >> position) & 1ULL);
         }
-        default: {
-            std::uint64_t      reg   = _seed;
-            const std::uint8_t shift = static_cast<std::uint8_t>(_width - 8U);
-            for (const std::uint8_t byte : message) {
-                reg = ((reg << 8U) & _mask) ^ _table[((reg >> shift) ^ byte) & 0xFFULL];
-            }
-            return ((_resultReflected ? detail::reverseBits(reg, _width) : reg) ^ _finalXor) & _mask;
-        }
-        }
+        return finish(reg);
     }
 
     [[nodiscard]] std::uint8_t                   width() const noexcept { return _width; }
@@ -132,6 +121,56 @@ public:
 private:
     [[nodiscard]] static constexpr std::uint64_t reverseByte(std::uint8_t byte) noexcept { return detail::reverseBits(byte, 8U); }
 
+    /// @brief `reg` after `message`, in the register form of `_form`.
+    [[nodiscard]] std::uint64_t feedBytes(std::uint64_t reg, std::span<const std::uint8_t> message) const noexcept {
+        switch (_form) {
+        case TableForm::Mirrored:
+            for (const std::uint8_t byte : message) {
+                reg = _table[(reg ^ byte) & 0xFFULL] ^ (reg >> 8U);
+            }
+            return reg;
+        case TableForm::LeftAligned:
+            if (_inputReflected) {
+                for (const std::uint8_t byte : message) {
+                    reg = _table[(reg ^ reverseByte(byte)) & 0xFFULL];
+                }
+            } else {
+                for (const std::uint8_t byte : message) {
+                    reg = _table[(reg ^ byte) & 0xFFULL];
+                }
+            }
+            return reg;
+        default: {
+            const std::uint8_t shift = static_cast<std::uint8_t>(_width - 8U);
+            for (const std::uint8_t byte : message) {
+                reg = ((reg << 8U) & _mask) ^ _table[((reg >> shift) ^ byte) & 0xFFULL];
+            }
+            return reg;
+        }
+        }
+    }
+
+    /// @brief `reg` after one message bit `bit`, 0 or 1, in the register form of `_form`.
+    [[nodiscard]] std::uint64_t feedBit(std::uint64_t reg, std::uint64_t bit) const noexcept {
+        switch (_form) {
+        case TableForm::Mirrored: return ((reg ^ bit) & 1ULL) != 0ULL ? ((reg >> 1U) ^ _registerPolynomial) : (reg >> 1U);
+        case TableForm::LeftAligned: return (((reg >> 7U) ^ bit) & 1ULL) != 0ULL ? (((reg << 1U) ^ _registerPolynomial) & 0xFFULL) : ((reg << 1U) & 0xFFULL);
+        default: return (((reg >> (_width - 1U)) ^ bit) & 1ULL) != 0ULL ? (((reg << 1U) ^ _registerPolynomial) & _mask) : ((reg << 1U) & _mask);
+        }
+    }
+
+    /// @brief The CRC from the register `reg` holds after the last message bit.
+    [[nodiscard]] std::uint64_t finish(std::uint64_t reg) const noexcept {
+        switch (_form) {
+        case TableForm::Mirrored: return ((_inputReflected != _resultReflected ? detail::reverseBits(reg, _width) : reg) ^ _finalXor) & _mask;
+        case TableForm::LeftAligned: {
+            const std::uint64_t unaligned = reg >> (8U - _width);
+            return ((_resultReflected ? detail::reverseBits(unaligned, _width) : unaligned) ^ _finalXor) & _mask;
+        }
+        default: return ((_resultReflected ? detail::reverseBits(reg, _width) : reg) ^ _finalXor) & _mask;
+        }
+    }
+
     void buildMsbFirst() {
         const std::uint64_t top = 1ULL << (_width - 1U);
         for (std::size_t i = 0UZ; i < 256UZ; ++i) {
@@ -141,7 +180,8 @@ private:
             }
             _table[i] = remainder;
         }
-        _seed = _initialValue;
+        _seed               = _initialValue;
+        _registerPolynomial = _polynomial;
     }
 
     void buildMirrored() {
@@ -153,7 +193,8 @@ private:
             }
             _table[i] = remainder & _mask;
         }
-        _seed = detail::reverseBits(_initialValue, _width);
+        _seed               = detail::reverseBits(_initialValue, _width);
+        _registerPolynomial = reflected;
     }
 
     void buildLeftAligned() {
@@ -165,11 +206,13 @@ private:
             }
             _table[i] = remainder;
         }
-        _seed = (_initialValue << (8U - _width)) & 0xFFULL;
+        _seed               = (_initialValue << (8U - _width)) & 0xFFULL;
+        _registerPolynomial = aligned;
     }
 
     std::array<std::uint64_t, 256> _table{};
     std::uint64_t                  _seed{};
+    std::uint64_t                  _registerPolynomial{}; ///< the polynomial in the register form of `_form`
     std::uint64_t                  _mask{};
     std::uint64_t                  _polynomial{};
     std::uint64_t                  _initialValue{};
