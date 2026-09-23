@@ -5,9 +5,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <numeric>
 #include <random>
 #include <span>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include <gnuradio-4.0/algorithm/fec/Interleaver.hpp>
@@ -211,6 +213,103 @@ void exercise(const char* name, std::size_t pad, unsigned trials) {
         }
     }
     expect(eq(exactAtLimit, static_cast<long>(trials) * static_cast<long>(t))) << name << ": every block inside the limit was recovered exactly (beyond it: accepted " << acceptedBeyond << " of " << trialsBeyond << ", of which not the transmitted word " << wrongBeyond << ")";
+}
+
+/// The field of `Code`: GF(64) for the 63-symbol codes, GF(256) for the 255-symbol ones.
+template<typename Code>
+[[nodiscard]] constexpr const auto& fieldOf() noexcept {
+    if constexpr (Code::kBlock == 63UZ) {
+        return kGf64;
+    } else {
+        return kGf256;
+    }
+}
+
+/// Whether `block` vanishes at every root of `Code`'s generator, evaluated here and not by the decoder.
+template<typename Code>
+[[nodiscard]] bool isCodeword(const typename Code::Block& block) {
+    constexpr auto& gf = fieldOf<Code>();
+    for (std::size_t i = 0UZ; i < Code::kRoots; ++i) {
+        std::uint8_t value = 0U;
+        for (const std::uint8_t symbol : block) {
+            const std::uint8_t scaled = value == 0U ? std::uint8_t{0} : gf.exp[(static_cast<unsigned>(gf.log[value]) + Code::rootExponent(i)) % static_cast<unsigned>(Code::kBlock)];
+            value                     = static_cast<std::uint8_t>(symbol ^ scaled);
+        }
+        if (value != 0U) {
+            return false;
+        }
+    }
+    return true;
+}
+
+template<std::size_t N>
+[[nodiscard]] unsigned distance(const std::array<std::uint8_t, N>& a, const std::array<std::uint8_t, N>& b) {
+    unsigned count = 0U;
+    for (std::size_t i = 0UZ; i < N; ++i) {
+        count += a[i] != b[i] ? 1U : 0U;
+    }
+    return count;
+}
+
+/// A codeword of `Code` over random information symbols, its first `pad` symbols zero.
+template<typename Code>
+[[nodiscard]] typename Code::Block randomCodeword(std::mt19937_64& engine, std::size_t pad) {
+    typename Code::Block block{};
+    for (std::size_t i = pad; i < Code::kBlock - Code::kRoots; ++i) {
+        block[i] = static_cast<std::uint8_t>(engine() & Code::kBlock);
+    }
+    Code::encode(block, pad);
+    return block;
+}
+
+/// A received word and the positions a demodulator marked as erased.
+template<typename Code>
+struct Damaged {
+    typename Code::Block     received{};
+    std::vector<std::size_t> erasures;
+};
+
+/// `clean` with `errors` symbols changed to another value and `erased` further symbols set to a random
+/// value, which may be the transmitted one, and marked; every position distinct and in `[pad, kBlock)`.
+template<typename Code>
+[[nodiscard]] Damaged<Code> damage(std::mt19937_64& engine, const typename Code::Block& clean, std::size_t pad, std::size_t errors, std::size_t erased) {
+    Damaged<Code>          out{clean, {}};
+    std::array<bool, 256U> used{};
+    for (std::size_t k = 0UZ; k < errors + erased; ++k) {
+        std::size_t position = 0UZ;
+        do {
+            position = pad + static_cast<std::size_t>(engine() % (Code::kBlock - pad));
+        } while (used[position]);
+        used[position] = true;
+        if (k < errors) {
+            std::uint8_t noise = 0U;
+            while (noise == 0U) {
+                noise = static_cast<std::uint8_t>(engine() & Code::kBlock);
+            }
+            out.received[position] = static_cast<std::uint8_t>(out.received[position] ^ noise);
+        } else {
+            out.received[position] = static_cast<std::uint8_t>(engine() & Code::kBlock);
+            out.erasures.push_back(position);
+        }
+    }
+    return out;
+}
+
+/// Recovery of `trials` words at each `(errors, erasures)` pair `pairs` names: the transmitted word, `valid`, and a
+/// correction count equal to the symbols that differ. Returns the count of words that fell short.
+template<typename Code>
+[[nodiscard]] std::size_t recoveryFailures(std::mt19937_64& engine, std::size_t pad, std::span<const std::pair<std::size_t, std::size_t>> pairs, std::size_t trials) {
+    std::size_t failures = 0UZ;
+    for (const auto& [errors, erased] : pairs) {
+        for (std::size_t trial = 0UZ; trial < trials; ++trial) {
+            const typename Code::Block clean   = randomCodeword<Code>(engine, pad);
+            const Damaged<Code>        damaged = damage<Code>(engine, clean, pad, errors, erased);
+            typename Code::Block       out     = damaged.received;
+            const RsResult             r       = Code::decodeWithErasures(out, damaged.erasures, pad);
+            failures += r.valid && out == clean && r.errors == distance(damaged.received, clean) ? 0UZ : 1UZ;
+        }
+    }
+    return failures;
 }
 
 } // namespace
@@ -600,6 +699,134 @@ const boost::ut::suite<"reed-solomon"> reedSolomonTests = [] {
             }
             expect(eq(hit, 16UZ)) << std::format("codeword {}: a burst of 80 consecutive symbols is 16 per codeword, exactly the radius", word);
         }
+    };
+
+    "erasures alone are corrected up to the number of roots"_test = [] {
+        std::mt19937_64 engine{0xE7A5ULL};
+        const auto      alone = [](std::size_t roots) {
+            std::vector<std::pair<std::size_t, std::size_t>> pairs;
+            for (std::size_t erased = 1UZ; erased <= roots; ++erased) {
+                pairs.emplace_back(0UZ, erased);
+            }
+            return pairs;
+        };
+        expect(eq(recoveryFailures<ReedSolomon6<12UZ>>(engine, 0UZ, alone(12UZ), 50UZ), 0UZ)) << "the 63-symbol code with 12 roots: 1 to 12 erasures, 50 words each";
+        expect(eq(recoveryFailures<ReedSolomon6<12UZ>>(engine, 39UZ, alone(12UZ), 50UZ), 0UZ)) << "RS(24,12,13): 1 to 12 erasures, 50 words each";
+        expect(eq(recoveryFailures<ReedSolomonCcsds255_223>(engine, 0UZ, alone(32UZ), 20UZ), 0UZ)) << "RS(255,223): 1 to 32 erasures, 20 words each";
+
+        // An erased symbol that holds the transmitted value is not a correction.
+        using Code              = ReedSolomon6<12UZ>;
+        const Code::Block clean = randomCodeword<Code>(engine, 39UZ);
+        Code::Block       block = clean;
+        block[50UZ]             = static_cast<std::uint8_t>(block[50UZ] ^ 0x21U);
+        const std::array<std::size_t, 3UZ> marked{40UZ, 47UZ, 62UZ};
+        const RsResult                     r = Code::decodeWithErasures(block, marked, 39UZ);
+        expect(that % (r.valid && block == clean && r.errors == 1U)) << "one error beside three erasures over correct symbols is one correction";
+    };
+
+    "errors and erasures together at every split on the bound"_test = [] {
+        std::mt19937_64 engine{0xB0DEULL};
+        const auto      onBound = [](std::size_t roots) {
+            std::vector<std::pair<std::size_t, std::size_t>> pairs;
+            for (std::size_t errors = 0UZ; 2UZ * errors <= roots; ++errors) {
+                pairs.emplace_back(errors, roots - 2UZ * errors);
+            }
+            return pairs;
+        };
+        expect(eq(recoveryFailures<ReedSolomon6<12UZ>>(engine, 0UZ, onBound(12UZ), 50UZ), 0UZ)) << "the 63-symbol code with 12 roots: 2e + erasures = 12 at e = 0 .. 6, 50 words each";
+        expect(eq(recoveryFailures<ReedSolomon6<12UZ>>(engine, 39UZ, onBound(12UZ), 50UZ), 0UZ)) << "RS(24,12,13): 2e + erasures = 12 at e = 0 .. 6, 50 words each";
+        expect(eq(recoveryFailures<ReedSolomonCcsds255_223>(engine, 0UZ, onBound(32UZ), 20UZ), 0UZ)) << "RS(255,223): 2e + erasures = 32 at e = 0 .. 16, 20 words each";
+    };
+
+    "decodeWithErasures with no erasures is decode"_test = [] {
+        const auto compare = [](auto code, std::size_t pad, std::uint64_t seed, const char* name) {
+            using Code = decltype(code);
+            std::mt19937_64 engine{seed};
+            std::size_t     words  = 0UZ;
+            std::size_t     differ = 0UZ;
+            for (std::size_t errors = 0UZ; errors <= Code::kCorrectable + 3UZ; ++errors) {
+                for (std::size_t trial = 0UZ; trial < 20UZ; ++trial) {
+                    const typename Code::Block received    = damage<Code>(engine, randomCodeword<Code>(engine, pad), pad, errors, 0UZ).received;
+                    typename Code::Block       viaDecode   = received;
+                    typename Code::Block       viaErasures = received;
+                    const RsResult             a           = Code::decode(viaDecode, pad);
+                    const RsResult             b           = Code::decodeWithErasures(viaErasures, {}, pad);
+                    differ += a.valid == b.valid && a.errors == b.errors && a.pad_corrupted == b.pad_corrupted && viaDecode == viaErasures ? 0UZ : 1UZ;
+                    ++words;
+                }
+            }
+            expect(eq(differ, 0UZ)) << std::format("{}: {} of {} words, 0 to t + 3 errors, decode differently", name, differ, words);
+        };
+        compare(ReedSolomon6<12UZ>{}, 39UZ, 0x0E1ULL, "RS(24,12,13)");
+        compare(ReedSolomon6<16UZ>{}, 27UZ, 0x0E2ULL, "RS(36,20,17)");
+        compare(ReedSolomonCcsds255_223{}, 0UZ, 0x0E3ULL, "RS(255,223)");
+    };
+
+    "a fixed-seed random run over errors and erasures, inside the bound and past it"_test = [] {
+        const auto run = [](auto code, std::size_t pad, std::uint64_t seed, std::size_t trials, const char* name) {
+            using Code = decltype(code);
+            std::mt19937_64 engine{seed};
+            std::size_t     inside    = 0UZ;
+            std::size_t     recovered = 0UZ;
+            std::size_t     beyond    = 0UZ;
+            std::size_t     accepted  = 0UZ;
+            std::size_t     broken    = 0UZ;
+            for (std::size_t trial = 0UZ; trial < trials; ++trial) {
+                const std::size_t          erased  = static_cast<std::size_t>(engine() % (Code::kRoots + 1UZ));
+                const std::size_t          errors  = static_cast<std::size_t>(engine() % ((Code::kRoots - erased) / 2UZ + 2UZ));
+                const typename Code::Block clean   = randomCodeword<Code>(engine, pad);
+                const Damaged<Code>        damaged = damage<Code>(engine, clean, pad, errors, erased);
+                typename Code::Block       out     = damaged.received;
+                const RsResult             r       = Code::decodeWithErasures(out, damaged.erasures, pad);
+                if (2UZ * errors + erased <= Code::kRoots) {
+                    ++inside;
+                    recovered += r.valid && out == clean && r.errors == distance(damaged.received, clean) ? 1UZ : 0UZ;
+                    continue;
+                }
+                ++beyond;
+                if (r.valid) {
+                    ++accepted;
+                    const bool padZero = std::all_of(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(pad), [](std::uint8_t symbol) { return symbol == 0U; });
+                    broken += isCodeword<Code>(out) && padZero && r.errors == distance(damaged.received, out) ? 0UZ : 1UZ;
+                }
+            }
+            expect(eq(recovered, inside)) << std::format("{}: {} of {} words inside the bound recovered exactly", name, recovered, inside);
+            expect(gt(beyond, 0UZ)) << std::format("{}: the run reaches past the bound", name);
+            expect(eq(broken, 0UZ)) << std::format("{}: past the bound, {} of {} accepted words are not a codeword or miscount the change", name, broken, accepted);
+        };
+        run(ReedSolomon6<12UZ>{}, 0UZ, 0x5EED01ULL, 20000UZ, "the 63-symbol code with 12 roots");
+        run(ReedSolomon6<12UZ>{}, 39UZ, 0x5EED02ULL, 20000UZ, "RS(24,12,13)");
+        run(ReedSolomonCcsds255_223{}, 0UZ, 0x5EED03ULL, 3000UZ, "RS(255,223)");
+    };
+
+    "a bad erasure list is refused and the block left untouched"_test = [] {
+        using Code = ReedSolomon6<12UZ>;
+        std::mt19937_64   engine{0xBADULL};
+        const Code::Block clean    = randomCodeword<Code>(engine, 39UZ);
+        Code::Block       received = clean;
+        received[45UZ]             = static_cast<std::uint8_t>(received[45UZ] ^ 0x11U);
+
+        const auto refused = [&received](const std::vector<std::size_t>& erasures, const char* what) {
+            Code::Block    block = received;
+            const RsResult r     = Code::decodeWithErasures(block, erasures, 39UZ);
+            expect(that % (!r.valid && r.errors == 0U && !r.pad_corrupted && block == received)) << what;
+        };
+        refused({63UZ}, "a position past the block");
+        refused({38UZ}, "a position in the shortening's padding");
+        refused({40UZ, 50UZ, 40UZ}, "a position given twice");
+        std::vector<std::size_t> thirteen(13UZ);
+        std::iota(thirteen.begin(), thirteen.end(), 40UZ);
+        refused(thirteen, "thirteen erasures against twelve roots");
+
+        const auto accepted = [&received, &clean](const std::vector<std::size_t>& erasures, const char* what) {
+            Code::Block    block = received;
+            const RsResult r     = Code::decodeWithErasures(block, erasures, 39UZ);
+            expect(that % (r.valid && block == clean)) << what;
+        };
+        accepted({39UZ, 62UZ}, "the first and the last carried position");
+        std::vector<std::size_t> twelve(12UZ);
+        std::iota(twelve.begin(), twelve.end(), 40UZ);
+        accepted(twelve, "twelve erasures, as many as the roots");
     };
 };
 
