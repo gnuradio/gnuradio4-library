@@ -38,10 +38,11 @@
  * The decoder is Berlekamp-Massey for the error locator, a Chien search for its roots and
  * Forney's formula for the magnitudes, with the field's logarithm and antilogarithm tables
  * carrying every multiplication. `decodeWithErasures` also takes the positions of erased
- * symbols, such as the least reliable symbols a soft-decision demodulator marks. The product of
- * `(1 + X x)` over the erased symbols, `X = beta^d` for the symbol at power `d`, seeds
- * Berlekamp-Massey, which extends it by the error locator, and a word is corrected whenever
- * twice its errors plus its erasures is at most R. `decode` is the same decoder with no erasures.
+ * symbols, such as the least reliable symbols a soft-decision demodulator marks. The erasure
+ * locator is the product of `(1 + X x)` over the erased symbols, with `X = beta^d` for the symbol
+ * at power `d`. It seeds Berlekamp-Massey, which multiplies it by the error locator. A word is
+ * corrected whenever twice its errors plus its erasures is at most R. `decode` is the same decoder
+ * with no erasures.
  *
  * **Where the generator's roots start, and how far apart they are.** A Reed-Solomon code is fixed
  * by its field and by the `Roots` consecutive powers its generator vanishes at, and two families
@@ -53,11 +54,11 @@
  * `FirstConsecutiveRoot = 128 - E`, which is 112 at `E = 16` and 120 at `E = 8`.
  *
  * Five places carry the two parameters and every one of them reduces to the plain expression at
- * `f = 1, PrimitiveStep = 1`: the generator's roots, the syndrome evaluation points, the erasure locator's `X`, the Chien
- * search's step, and Forney's magnitude, which gains the factor `X^(1-f)`. That factor is the one
- * that is easy to leave out, and leaving it out produces a decoder that locates errors correctly
- * and corrects them wrongly — caught here by the post-correction syndrome check, which then fails
- * on every correctable word rather than on none.
+ * `f = 1, PrimitiveStep = 1`: the generator's roots, the syndrome evaluation points, the erasure
+ * locator's `X`, the Chien search's step, and Forney's magnitude, which gains the factor
+ * `X^(1-f)`. That factor is the one that is easy to leave out, and leaving it out produces a
+ * decoder that locates errors correctly and corrects them wrongly — caught here by the
+ * post-correction syndrome check, which then fails on every correctable word rather than on none.
  */
 namespace gr::fec {
 
@@ -211,8 +212,12 @@ struct ReedSolomon {
     /// their positions are known and their values are not. `e` errors are corrected together with
     /// the erasures whenever `2e + erasures.size() <= Roots`. The result's `errors` counts the
     /// symbols changed, which leaves out an erased symbol that already held the transmitted value.
-    /// A position outside `[pad, kBlock)`, a position given twice or more than `Roots` positions is
-    /// refused: the result is not `valid` and `block` is untouched. No erasures is `decode`.
+    /// With `Roots` erasures every received word decodes to a codeword: the erased symbols take the
+    /// values that clear all `Roots` syndromes. `valid` then says only that, and an error among the
+    /// other symbols goes undetected. With fewer erasures, damage past the bound can fail the checks
+    /// and leave the result not `valid`. A position outside `[pad, kBlock)`, a position named twice,
+    /// or a list of more than `Roots` positions is refused: the result is not `valid` and `block` is
+    /// untouched. No erasures is `decode`.
     static RsResult decodeWithErasures(Block& block, std::span<const std::size_t> erasures, std::size_t pad = 0UZ) noexcept {
         if (erasures.size() > Roots) {
             return {};
