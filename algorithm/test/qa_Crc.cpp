@@ -13,6 +13,7 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include <gnuradio-4.0/algorithm/digital/Crc.hpp>
@@ -192,6 +193,15 @@ constexpr Parameters kCatalog[] = {
     }
     return out;
 }
+
+/// The type of the bit count `Crc::computeBits` takes.
+template<typename>
+struct CountParameter;
+
+template<typename Result, typename Class, typename Message, typename Count>
+struct CountParameter<Result (Class::*)(Message, Count) const> {
+    using type = Count;
+};
 
 } // namespace
 
@@ -540,6 +550,22 @@ const boost::ut::suite<"crc"> crcTests = [] {
         expect(nothrow([&crc, &message] { (void)crc.computeBits(message, 8UZ * message.size()); }));
         expect(throws([&crc, &message] { (void)crc.computeBits(message, 8UZ * message.size() + 1UZ); })) << "one bit more than the message holds";
         expect(throws([&crc] { (void)crc.computeBits(std::span<const std::uint8_t>{}, 1UZ); })) << "one bit of an empty message";
+    };
+
+    "computeBits counts bits in 64 bits, where a 32-bit count of a long message wraps"_test = [] {
+        using Count = CountParameter<decltype(&Crc::computeBits)>::type;
+        static_assert(std::is_same_v<Count, std::uint64_t>, "the bit count is 64 bits wide on every platform");
+
+        // 2^29 + 1 bytes is the shortest message whose bit count wraps a 32-bit std::size_t.
+        constexpr std::uint32_t kBytes = 0x2000'0001U;
+        static_assert(8U * kBytes == 8U, "in 32 bits the count of 2^29 + 1 bytes wraps to one byte");
+        constexpr Count kBits = Count{8} * kBytes;
+        static_assert(kBits / 8U == kBytes && kBits % 8U == 0U, "in the count type it covers every byte and no bit more");
+
+        const auto message = randomBytes(13UZ, 0x40ULL);
+        const Crc  crc     = kernelOf(kCatalog[12]);
+        expect(eq(crc.computeBits(message, Count{8} * message.size()), crc.compute(message))) << "the whole message, its count formed in the count type";
+        expect(throws([&crc, &message] { (void)crc.computeBits(message, (Count{1} << 32U) + 8U); })) << "2^32 + 8 bits, whose low 32 bits the message holds";
     };
 };
 
