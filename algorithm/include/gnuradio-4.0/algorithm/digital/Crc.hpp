@@ -38,9 +38,8 @@
  * masked to `width` bits on every branch, so an over-wide polynomial cannot mean one thing reflected
  * and another not.
  *
- * The kernel is immutable after construction. `compute` and `computeBits` are `const` and change
- * nothing, so one instance is safe to call concurrently. Each instance carries its own 2 KiB table by
- * value.
+ * The kernel is immutable after construction. `compute` and `computeBits` are `const`. One instance
+ * is safe to call from several threads at once. Each instance carries its own 2 KiB table by value.
  *
  * `compute` takes a message of whole bytes. `computeBits` takes a message of any whole number of bits,
  * packed eight to a byte in the order the model reads a byte: most significant bit first when
@@ -92,18 +91,21 @@ public:
 
     /// @brief The CRC of the first `bitCount` bits of `message`, packed as the file comment states.
     ///
-    /// The bits of the last byte past `bitCount` are ignored. `computeBits(message, 8 * message.size())`
-    /// equals `compute(message)`. Throws `std::invalid_argument` when `message` holds fewer than `bitCount` bits.
-    [[nodiscard]] std::uint64_t computeBits(std::span<const std::uint8_t> message, std::size_t bitCount) const {
-        const std::size_t wholeBytes = bitCount / 8UZ;
-        const std::size_t extraBits  = bitCount % 8UZ;
-        if (wholeBytes + (extraBits != 0UZ ? 1UZ : 0UZ) > message.size()) {
+    /// The bits of the last byte past `bitCount` are ignored. Throws `std::invalid_argument` when
+    /// `message` holds fewer than `bitCount` bits. The count and its check against the message are 64-bit
+    /// on every platform. `computeBits(message, std::uint64_t{8} * message.size())` equals
+    /// `compute(message)`; the same product formed in a 32-bit `std::size_t` wraps at 2^29 bytes.
+    [[nodiscard]] std::uint64_t computeBits(std::span<const std::uint8_t> message, std::uint64_t bitCount) const {
+        const std::uint64_t wholeBytes = bitCount / 8U;
+        const std::uint64_t extraBits  = bitCount % 8U;
+        if (wholeBytes + (extraBits != 0U ? 1U : 0U) > message.size()) {
             throw std::invalid_argument("gr::digital::Crc: bitCount " + std::to_string(bitCount) + " exceeds the " + std::to_string(message.size()) + "-byte message");
         }
-        std::uint64_t reg = feedBytes(_seed, message.first(wholeBytes));
-        for (std::size_t k = 0UZ; k < extraBits; ++k) {
-            const std::size_t position = _inputReflected ? k : 7UZ - k;
-            reg                        = feedBit(reg, (static_cast<std::uint64_t>(message[wholeBytes]) >> position) & 1ULL);
+        const std::uint8_t* const partial = message.data() + wholeBytes;
+        std::uint64_t             reg     = feedBytes(_seed, std::span<const std::uint8_t>(message.data(), partial));
+        for (std::uint64_t k = 0U; k < extraBits; ++k) {
+            const std::uint64_t position = _inputReflected ? k : 7U - k;
+            reg                          = feedBit(reg, (static_cast<std::uint64_t>(*partial) >> position) & 1ULL);
         }
         return finish(reg);
     }
@@ -159,7 +161,7 @@ private:
         }
     }
 
-    /// @brief The CRC from the register `reg` holds after the last message bit.
+    /// @brief The CRC, given the register value `reg` after the last message bit.
     [[nodiscard]] std::uint64_t finish(std::uint64_t reg) const noexcept {
         switch (_form) {
         case TableForm::Mirrored: return ((_inputReflected != _resultReflected ? detail::reverseBits(reg, _width) : reg) ^ _finalXor) & _mask;
