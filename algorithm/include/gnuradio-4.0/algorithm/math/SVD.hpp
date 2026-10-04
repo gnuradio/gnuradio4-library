@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <concepts>
 #include <limits>
 #include <numeric>
 #include <ranges>
@@ -67,6 +68,10 @@ constexpr T conj(const T& val) {
         return val;
     }
 }
+
+/// A real or complex floating-point element type.
+template<typename T>
+concept FloatingElement = std::floating_point<T> || (gr::meta::complex_like<T> && std::floating_point<gr::meta::fundamental_base_value_type_t<T>>);
 
 /// A plane rotation J = [[c, s], [-conj(s), c]] with a real cosine c.
 template<typename T, typename BaseValueType = gr::meta::fundamental_base_value_type_t<T>>
