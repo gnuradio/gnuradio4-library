@@ -68,6 +68,53 @@ constexpr T conj(const T& val) {
     }
 }
 
+/// A plane rotation J = [[c, s], [-conj(s), c]] with a real cosine c.
+template<typename T, typename BaseValueType = gr::meta::fundamental_base_value_type_t<T>>
+struct JacobiRotation {
+    BaseValueType c;
+    T             s;
+    BaseValueType shift; /// J^H G J has alpha - shift and beta + shift on its diagonal
+};
+
+/**
+ * @brief The Jacobi rotation that diagonalizes the Hermitian 2 x 2 matrix G = [[alpha, gamma], [conj(gamma), beta]].
+ *
+ * J^H G J has a zero off-diagonal entry. Of the two such rotations this returns the one with the
+ * smaller angle, |t| <= 1 for t = |s| / c. For gamma = 0 it returns the identity.
+ */
+template<typename T, typename BaseValueType = gr::meta::fundamental_base_value_type_t<T>>
+[[nodiscard]] JacobiRotation<T, BaseValueType> jacobiRotation(BaseValueType alpha, BaseValueType beta, T gamma) noexcept {
+    const BaseValueType absOff = std::abs(gamma);
+    if (absOff == BaseValueType{0}) {
+        return {BaseValueType{1}, T{0}, BaseValueType{0}};
+    }
+    constexpr BaseValueType epsilon = std::numeric_limits<BaseValueType>::epsilon() * BaseValueType{1000};
+    const T                 phase   = gamma / absOff; // +1 or -1 for a real element type
+    BaseValueType           t;
+    if (std::abs(beta - alpha) <= epsilon * (std::abs(alpha) + std::abs(beta))) {
+        t = BaseValueType{1}; // equal diagonal entries: a rotation by 45 degrees
+    } else {
+        const BaseValueType zeta = (beta - alpha) / (BaseValueType{2} * absOff);
+        t                        = BaseValueType{1} / (std::abs(zeta) + std::sqrt(BaseValueType{1} + zeta * zeta));
+        if (zeta < BaseValueType{0}) {
+            t = -t;
+        }
+    }
+    const BaseValueType c = BaseValueType{1} / std::sqrt(BaseValueType{1} + t * t);
+    return {c, phase * (c * t), t * absOff};
+}
+
+/// Multiplies columns i and j of the first `rows` rows of M by the rotation [[c, s], [-conj(s), c]] from the right.
+template<typename T, typename BaseValueType = gr::meta::fundamental_base_value_type_t<T>>
+void rotateColumns(Tensor<T>& M, std::size_t i, std::size_t j, BaseValueType c, T s, std::size_t rows) noexcept {
+    for (std::size_t k = 0; k < rows; ++k) {
+        const T mi = M[k, i];
+        const T mj = M[k, j];
+        M[k, i]    = c * mi - conj(s) * mj;
+        M[k, j]    = s * mi + c * mj;
+    }
+}
+
 // one-sided Jacobi SVD: works best when m >= n (tall matrices)
 // A is modified in-place to become U, V and singularValues are outputs
 template<typename T, typename BaseValueType = gr::meta::fundamental_base_value_type_t<T>>
@@ -119,55 +166,11 @@ svd::Status svdJacobi(Tensor<T>& A, Tensor<T>* V, Tensor<BaseValueType>& singula
                 if (std::abs(dot_ij) > threshold) {
                     converged = false;
 
-                    // compute Jacobi rotation to orthogonalise columns i and j
-                    BaseValueType c;
-                    T             s;
-
-                    if constexpr (gr::meta::complex_like<T>) {
-                        // complex case: use complex Givens rotation
-                        BaseValueType absOff = std::abs(dot_ij);
-                        if (std::abs(dot_jj - dot_ii) < epsilon * (dot_ii + dot_jj)) {
-                            c = BaseValueType{1} / std::sqrt(BaseValueType{2});
-                            s = (dot_ij / absOff) * c;
-                        } else {
-                            BaseValueType zeta = (dot_jj - dot_ii) / (BaseValueType{2} * absOff);
-                            BaseValueType t    = BaseValueType{1} / (std::abs(zeta) + std::sqrt(BaseValueType{1} + zeta * zeta));
-                            if (zeta < BaseValueType{0}) {
-                                t = -t;
-                            }
-                            c = BaseValueType{1} / std::sqrt(BaseValueType{1} + t * t);
-                            s = (dot_ij / absOff) * c * t;
-                        }
-                    } else {
-                        // real case
-                        if (std::abs(dot_jj - dot_ii) < epsilon * (dot_ii + dot_jj)) {
-                            BaseValueType sqrt2 = std::sqrt(BaseValueType{2});
-                            c                   = BaseValueType{1} / sqrt2;
-                            s                   = (dot_ij > BaseValueType{0}) ? (BaseValueType{1} / sqrt2) : (BaseValueType{-1} / sqrt2);
-                        } else {
-                            BaseValueType zeta = (dot_jj - dot_ii) / (BaseValueType{2} * dot_ij);
-                            BaseValueType t    = sign(zeta) / (std::abs(zeta) + std::sqrt(BaseValueType{1} + zeta * zeta));
-                            c                  = BaseValueType{1} / std::sqrt(BaseValueType{1} + t * t);
-                            s                  = c * t;
-                        }
-                    }
-
-                    // apply rotation to A: columns i and j
-                    for (std::size_t k = 0; k < m; ++k) {
-                        T temp_i = c * A[k, i] - conj(s) * A[k, j];
-                        T temp_j = s * A[k, i] + c * A[k, j];
-                        A[k, i]  = temp_i;
-                        A[k, j]  = temp_j;
-                    }
-
-                    // apply rotation to V if computing it
+                    // orthogonalize columns i and j: the rotation that diagonalizes their 2 x 2 Gram matrix
+                    const auto rotation = jacobiRotation(dot_ii, dot_jj, dot_ij);
+                    rotateColumns(A, i, j, rotation.c, rotation.s, m);
                     if (computeV && V) {
-                        for (std::size_t k = 0; k < n; ++k) {
-                            T temp_i   = c * (*V)[k, i] - conj(s) * (*V)[k, j];
-                            T temp_j   = s * (*V)[k, i] + c * (*V)[k, j];
-                            (*V)[k, i] = temp_i;
-                            (*V)[k, j] = temp_j;
-                        }
+                        rotateColumns(*V, i, j, rotation.c, rotation.s, n);
                     }
                 }
             }
