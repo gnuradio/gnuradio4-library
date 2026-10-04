@@ -4,12 +4,14 @@
 #include <gnuradio-4.0/algorithm/math/SVD.hpp>
 #include <gnuradio-4.0/algorithm/math/TensorMath.hpp>
 
+#include <array>
 #include <cmath>
 #include <complex>
 #include <iomanip>
 #include <limits>
 #include <random>
 #include <tuple>
+#include <vector>
 
 using namespace gr::math;
 
@@ -1202,6 +1204,45 @@ const boost::ut::suite<"GolubReinsch Internals -- Regression Tests"> _gr_interna
             expect(approx_equal(beta, 5.0, 1e-10)) << "beta = " << beta;
         };
     };
+
+    "the reflector maps x onto its first axis at any input scale"_test = []<typename T> {
+        using RealT               = gr::meta::fundamental_base_value_type_t<T>;
+        constexpr std::size_t n   = 5UZ;
+        constexpr RealT       eps = std::numeric_limits<RealT>::epsilon();
+        // At eps^2 the first entry of the reflector lies below eps. Below sqrt(denorm_min) the square of every entry underflows to zero.
+        const std::array<RealT, 3>  scales{RealT{1}, eps * eps, std::sqrt(std::numeric_limits<RealT>::denorm_min()) / RealT{16}};
+        const std::array<double, n> re{3.0, -1.0, 2.0, 0.5, -4.0};
+        const std::array<double, n> im{1.0, 0.0, -2.0, 1.5, 0.5};
+
+        for (const RealT scale : scales) {
+            Tensor<T> x({n, 1UZ});
+            RealT     unitNormSquared{0};
+            for (std::size_t i = 0UZ; i < n; ++i) {
+                if constexpr (gr::meta::complex_like<T>) {
+                    x[i, 0UZ] = T{static_cast<RealT>(re[i]), static_cast<RealT>(im[i])};
+                } else {
+                    x[i, 0UZ] = static_cast<RealT>(re[i]);
+                }
+                unitNormSquared += static_cast<RealT>(std::norm(x[i, 0UZ]));
+                x[i, 0UZ] *= scale;
+            }
+            const RealT norm = scale * std::sqrt(unitNormSquared);
+
+            std::vector<T> v(n);
+            for (std::size_t i = 0UZ; i < n; ++i) {
+                v[i] = x[i, 0UZ];
+            }
+            RealT tau{0};
+            std::ignore = householderVector(v.data(), n, tau);
+            applyHouseholderLeft(x, v.data() + 1, tau, 0UZ, 0UZ, n - 1UZ); // H x with H = I - tau [1, v_tail] [1, v_tail]^H
+
+            const RealT tolerance = RealT{16} * static_cast<RealT>(n) * eps;
+            expect(le(std::abs(static_cast<RealT>(std::abs(x[0UZ, 0UZ])) - norm) / norm, tolerance)) << scale << "|(H x)_0| = ||x||";
+            for (std::size_t i = 1UZ; i < n; ++i) {
+                expect(le(static_cast<RealT>(std::abs(x[i, 0UZ])) / norm, tolerance)) << scale << "(H x)_" << i << "= 0";
+            }
+        }
+    } | std::tuple<float, double, std::complex<float>, std::complex<double>>{};
 
     "Bidiagonalisation"_test = [] {
         "produces correct structure"_test = [] {

@@ -225,10 +225,20 @@ BaseValueType householderVector(T* x, std::size_t n, BaseValueType& tau) {
         }
     }
 
-    // compute ||x[1:n]||^2
+    // The squared norms are taken of x * down, where down is the power of two that brings the largest magnitude
+    // into [1, 2). No square underflows or overflows at any input scale, and the scaling itself is exact.
+    BaseValueType maxMagnitude{0};
+    for (std::size_t i = 0; i < n; ++i) {
+        maxMagnitude = std::max(maxMagnitude, static_cast<BaseValueType>(std::abs(x[i])));
+    }
+    const int           exponent = std::clamp(std::ilogb(maxMagnitude), std::numeric_limits<BaseValueType>::min_exponent - 1, std::numeric_limits<BaseValueType>::max_exponent - 1);
+    const BaseValueType down     = std::ldexp(BaseValueType{1}, -exponent);
+    const BaseValueType up       = std::ldexp(BaseValueType{1}, exponent);
+
+    // compute ||x[1:n] * down||^2
     BaseValueType xnorm_sq{0};
     for (std::size_t i = 1; i < n; ++i) {
-        xnorm_sq += squaredMagnitude(x[i]);
+        xnorm_sq += squaredMagnitude(x[i] * down);
     }
 
     if (xnorm_sq == BaseValueType{0}) {
@@ -241,9 +251,9 @@ BaseValueType householderVector(T* x, std::size_t n, BaseValueType& tau) {
         }
     }
 
-    // compute norm of entire vector: ||x|| = sqrt(|x[0]|^2 + xnorm_sq)
-    BaseValueType x0_mag_sq = squaredMagnitude(x[0]);
-    BaseValueType xnorm     = std::sqrt(x0_mag_sq + xnorm_sq);
+    // compute norm of entire vector: ||x|| = up * sqrt(|x[0] * down|^2 + xnorm_sq)
+    BaseValueType x0_mag_sq = squaredMagnitude(x[0] * down);
+    BaseValueType xnorm     = up * std::sqrt(x0_mag_sq + xnorm_sq);
 
     // choose sign to avoid cancellation: beta = -sign(x[0]) * ||x||
     T beta;
@@ -261,7 +271,7 @@ BaseValueType householderVector(T* x, std::size_t n, BaseValueType& tau) {
 
     // v[0] = x[0] - beta, v[1:n] = x[1:n]
     T             v0        = x[0] - beta;
-    BaseValueType v0_mag_sq = squaredMagnitude(v0);
+    BaseValueType v0_mag_sq = squaredMagnitude(v0 * down);
     BaseValueType vnorm_sq  = v0_mag_sq + xnorm_sq;
 
     // for normalized vector v' = [1, x[1]/v0, ...]:
@@ -272,7 +282,7 @@ BaseValueType householderVector(T* x, std::size_t n, BaseValueType& tau) {
     // store normalized tail: x[1:n] /= v0
     // x[0] stores v0 for back-accumulation (but we use implicit v[0]=1 in transformations)
     x[0] = v0;
-    if (std::abs(v0) > std::numeric_limits<BaseValueType>::epsilon()) {
+    if (v0_mag_sq > BaseValueType{0}) { // tau is non-zero exactly when the tail is scaled
         T scale = T{1} / v0;
         for (std::size_t i = 1; i < n; ++i) {
             x[i] *= scale;
