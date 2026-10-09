@@ -199,6 +199,38 @@ const boost::ut::suite<"eigh"> _eigh = [] {
         expect(eigh(values, V, beyond) == eig::Status::InvalidInput) << typeName<T>();
     } | ElementTypes{};
 
+    "a pair whose diagonal difference overflows decomposes as it does at unit scale"_test = []<typename T> {
+        // [[-s, g], [conj(g), s]] with |g| = s / 8 has eigenvalues -s sqrt(65) / 8 and s sqrt(65) / 8.
+        // For s = 2^(max_exponent - 1) the eigenvalues and the Frobenius norm are finite, and 2 s overflows.
+        const Real<T>                   top    = std::ldexp(Real<T>{1}, std::numeric_limits<Real<T>>::max_exponent - 1);
+        const std::pair<double, double> g      = gr::meta::complex_like<T> ? std::pair{0.6, 0.8} : std::pair{1.0, 0.0};
+        const Real<T>                   lambda = std::sqrt(Real<T>{65}) / Real<T>{8};
+        for (const Real<T> scale : {Real<T>{1}, top}) {
+            Tensor<T> A = matrix<T>(2, 2, {{-1, 0}, {g.first / 8, g.second / 8}, {g.first / 8, -g.second / 8}, {1, 0}});
+            for (auto& a : A) {
+                a *= scale;
+            }
+            Tensor<Real<T>> values;
+            Tensor<T>       V;
+            expect(eigh(values, V, A) == eig::Status::Success) << typeName<T>() << scale << fatal;
+
+            // the residual A V - V diag(values) relative to s, with each factor divided by s, a power of two, before the product
+            Real<T> residual{0};
+            for (std::size_t i = 0UZ; i < 2UZ; ++i) {
+                for (std::size_t k = 0UZ; k < 2UZ; ++k) {
+                    T av{0};
+                    for (std::size_t j = 0UZ; j < 2UZ; ++j) {
+                        av += (A[i, j] / scale) * V[j, k];
+                    }
+                    residual = std::max(residual, static_cast<Real<T>>(std::abs(av - V[i, k] * (values[k] / scale))));
+                }
+            }
+            expect(le(residual, tolerance<T>(2))) << typeName<T>() << scale << "A V = V diag(values)";
+            expect(le(std::abs(values[0] / scale + lambda), tolerance<T>(2))) << typeName<T>() << scale << values[0];
+            expect(le(std::abs(values[1] / scale - lambda), tolerance<T>(2))) << typeName<T>() << scale << values[1];
+        }
+    } | ElementTypes{};
+
     "eigenvalues worked by hand"_test = []<typename T> {
         // [[2, g], [conj(g), 2]] with |g| = 1 has eigenvalues 2 - |g| and 2 + |g|
         const std::pair<double, double> g = gr::meta::complex_like<T> ? std::pair{0.6, 0.8} : std::pair{1.0, 0.0};
