@@ -177,7 +177,7 @@ template<typename T, typename RealT>
 template<typename T, typename RealT>
 [[nodiscard]] bool isEigenPair(const Tensor<RealT>& values, const Tensor<T>& vectors) {
     const std::size_t n = values.size();
-    return values.rank() == 1UZ && vectors.rank() == 2UZ && vectors.extent(0) == n && vectors.extent(1) == n && std::ranges::is_sorted(values);
+    return values.rank() == 1UZ && vectors.rank() == 2UZ && vectors.extent(0) == n && vectors.extent(1) == n && std::ranges::is_sorted(values) && isFinite(values) && isFinite(vectors);
 }
 
 } // namespace detail
@@ -187,7 +187,8 @@ template<typename T, typename RealT>
  *
  * `values` is ascending and `vectors` holds one eigenvector per column, as eigh returns them.
  * `noise` takes the first n - count columns and `signal` the last count columns, both in ascending
- * order of eigenvalue. Returns InvalidInput when count exceeds n or the inputs are not such a pair.
+ * order of eigenvalue. Returns InvalidInput when count exceeds n, when the inputs are not such a
+ * pair, or when an entry of either is not finite.
  */
 template<typename T, typename RealT>
 [[nodiscard]] eig::Status subspace(Tensor<T>& signal, Tensor<T>& noise, const Tensor<RealT>& values, const Tensor<T>& vectors, eig::Rank rank) {

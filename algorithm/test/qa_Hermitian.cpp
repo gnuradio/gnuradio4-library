@@ -333,6 +333,41 @@ const boost::ut::suite<"subspace"> _subspace = [] {
         expect(subspace(signal, noise, values, V, eig::Rank{3UZ}) == eig::Status::Success && eq(noise.extent(1), 0UZ)) << typeName<T>();
         expect(subspace(signal, noise, values, V, eig::Threshold{Real<T>{2}}) == eig::Status::Success && eq(signal.extent(1), 0UZ)) << typeName<T>();
     } | ElementTypes{};
+
+    "an eigenpair with a non-finite entry is refused and leaves both subspaces as they were"_test = []<typename T> {
+        Tensor<Real<T>> values;
+        Tensor<T>       V;
+        expect(eigh(values, V, chosenHermitian<T>()) == eig::Status::Success) << typeName<T>() << fatal;
+        Tensor<T> signal;
+        Tensor<T> noise;
+        expect(subspace(signal, noise, values, V, eig::Rank{2UZ}) == eig::Status::Success) << typeName<T>() << "a finite eigenpair";
+        const Tensor<T> signalBefore = signal;
+        const Tensor<T> noiseBefore  = noise;
+
+        // a call that returned Success would write a split other than the saved one: three signal columns, or all five
+        const eig::Rank               rank{3UZ};
+        const eig::Threshold<Real<T>> threshold{std::numeric_limits<Real<T>>::lowest()};
+        for (const double bad : {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
+            Tensor<T> badVectors      = V;
+            badVectors[1, 2]          = element<T>(bad);
+            Tensor<Real<T>> badValues = values;
+            badValues[4]              = static_cast<Real<T>>(bad); // the order test alone admits NaN and +inf as the last value
+            const auto unchanged      = [&] {
+                const bool same = std::ranges::equal(signal, signalBefore) && std::ranges::equal(noise, noiseBefore);
+                signal          = signalBefore;
+                noise           = noiseBefore;
+                return same;
+            };
+            expect(subspace(signal, noise, values, badVectors, rank) == eig::Status::InvalidInput) << typeName<T>() << bad << "in vectors, by rank";
+            expect(unchanged()) << typeName<T>() << bad << "in vectors, by rank: both subspaces are left as they were";
+            expect(subspace(signal, noise, values, badVectors, threshold) == eig::Status::InvalidInput) << typeName<T>() << bad << "in vectors, by threshold";
+            expect(unchanged()) << typeName<T>() << bad << "in vectors, by threshold: both subspaces are left as they were";
+            expect(subspace(signal, noise, badValues, V, rank) == eig::Status::InvalidInput) << typeName<T>() << bad << "in values, by rank";
+            expect(unchanged()) << typeName<T>() << bad << "in values, by rank: both subspaces are left as they were";
+            expect(subspace(signal, noise, badValues, V, threshold) == eig::Status::InvalidInput) << typeName<T>() << bad << "in values, by threshold";
+            expect(unchanged()) << typeName<T>() << bad << "in values, by threshold: both subspaces are left as they were";
+        }
+    } | ElementTypes{};
 };
 
 int main() { /* tests are automatically registered and executed */ return 0; }
