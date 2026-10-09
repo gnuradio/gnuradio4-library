@@ -3,11 +3,13 @@
 #include <gnuradio-4.0/Tensor.hpp>
 #include <gnuradio-4.0/algorithm/math/LinearSolve.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <limits>
 #include <string>
 #include <tuple>
+#include <utility>
 
 namespace {
 
@@ -216,6 +218,32 @@ const boost::ut::suite<"Cholesky"> _cholesky = [] {
         withNaN[2, 1]     = element<T>(std::numeric_limits<double>::quiet_NaN());
         expect(cholesky(L, withNaN) == solve::Status::InvalidInput) << typeName<T>();
         expect(x.size() == 0UZ) << typeName<T>() << "a refused solve leaves x untouched";
+    } | ElementTypes{};
+
+    "a factor with a non-finite entry is refused and leaves x as it was"_test = []<typename T> {
+        const Tensor<T> L0 = chosenFactor<T>();
+        const Tensor<T> x0 = matrix<T>(4, 1, {{1, 0}, {-2, 1}, {0, -1}, {3, 0}});
+        const Tensor<T> b  = multiply(multiply(L0, adjoint(L0)), x0);
+
+        Tensor<T> x;
+        expect(choleskySolve(x, L0, b) == solve::Status::Success) << typeName<T>() << "a finite factor";
+        expect(le(relativeError(x, x0), tolerance<T>(4))) << typeName<T>() << "a finite factor";
+
+        const Tensor<T> solved = x;
+        for (const double bad : {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}) {
+            for (const auto& [i, j] : {std::pair{2UZ, 1UZ}, std::pair{3UZ, 3UZ}}) { // below the diagonal and on it
+                Tensor<T> L = L0;
+                L[i, j]     = element<T>(bad);
+                expect(choleskySolve(x, L, b) == solve::Status::InvalidInput) << typeName<T>() << bad << "at" << i << j;
+                expect(std::ranges::equal(x, solved)) << typeName<T>() << bad << "at" << i << j << "x is left as it was";
+            }
+        }
+
+        // the solve reads the lower triangle only
+        Tensor<T> upper = L0;
+        upper[0, 3]     = element<T>(std::numeric_limits<double>::quiet_NaN());
+        expect(choleskySolve(x, upper, b) == solve::Status::Success) << typeName<T>() << "a non-finite entry above the diagonal";
+        expect(le(relativeError(x, x0), tolerance<T>(4))) << typeName<T>() << "a non-finite entry above the diagonal";
     } | ElementTypes{};
 };
 

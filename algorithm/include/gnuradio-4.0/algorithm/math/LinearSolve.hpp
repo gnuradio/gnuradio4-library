@@ -171,10 +171,39 @@ requires detail::FloatingElement<T>
     return solve::Status::Success;
 }
 
+namespace detail {
+
+/// Solves L L^H x = b for the lower triangle of an n x n factor L and k right-hand sides, and writes x with the rank of b.
+template<typename T, TensorLike TensorL, TensorLike TensorB>
+void choleskySubstitute(Tensor<T>& x, const TensorL& L, const TensorB& b, std::size_t k) {
+    const std::size_t n = L.extent(0);
+    Tensor<T>         X = rhsMatrix<T>(b, n, k);
+    for (std::size_t c = 0UZ; c < k; ++c) {
+        for (std::size_t i = 0UZ; i < n; ++i) { // L y = b
+            T sum = X[i, c];
+            for (std::size_t j = 0UZ; j < i; ++j) {
+                sum -= L[i, j] * X[j, c];
+            }
+            X[i, c] = sum / L[i, i];
+        }
+        for (std::size_t i = n; i-- > 0UZ;) { // L^H x = y
+            T sum = X[i, c];
+            for (std::size_t j = i + 1UZ; j < n; ++j) {
+                sum -= conj(L[j, i]) * X[j, c];
+            }
+            X[i, c] = sum / conj(L[i, i]);
+        }
+    }
+    storeSolution(x, X, n, b.rank());
+}
+
+} // namespace detail
+
 /**
  * @brief Solves L L^H x = b for a Cholesky factor L.
  *
  * Forward substitution with L, then back substitution with L^H. Reads the lower triangle of L.
+ * Returns InvalidInput when an entry of that triangle is not finite.
  */
 template<TensorLike TensorL, TensorLike TensorB, typename T = typename std::remove_cvref_t<TensorL>::value_type>
 requires detail::FloatingElement<T>
@@ -188,29 +217,19 @@ requires detail::FloatingElement<T>
         return solve::Status::InvalidInput;
     }
     for (std::size_t i = 0UZ; i < n; ++i) {
+        for (std::size_t j = 0UZ; j <= i; ++j) {
+            const T entry = L[i, j];
+            if (!std::isfinite(std::real(entry)) || !std::isfinite(std::imag(entry))) {
+                return solve::Status::InvalidInput;
+            }
+        }
+    }
+    for (std::size_t i = 0UZ; i < n; ++i) {
         if (L[i, i] == T{0}) {
             return solve::Status::Singular;
         }
     }
-
-    Tensor<T> X = detail::rhsMatrix<T>(b, n, k);
-    for (std::size_t c = 0UZ; c < k; ++c) {
-        for (std::size_t i = 0UZ; i < n; ++i) { // L y = b
-            T sum = X[i, c];
-            for (std::size_t j = 0UZ; j < i; ++j) {
-                sum -= L[i, j] * X[j, c];
-            }
-            X[i, c] = sum / L[i, i];
-        }
-        for (std::size_t i = n; i-- > 0UZ;) { // L^H x = y
-            T sum = X[i, c];
-            for (std::size_t j = i + 1UZ; j < n; ++j) {
-                sum -= detail::conj(L[j, i]) * X[j, c];
-            }
-            X[i, c] = sum / detail::conj(L[i, i]);
-        }
-    }
-    detail::storeSolution(x, X, n, b.rank());
+    detail::choleskySubstitute(x, L, b, k);
     return solve::Status::Success;
 }
 
@@ -225,7 +244,13 @@ requires detail::FloatingElement<T>
     if (status != solve::Status::Success) {
         return status;
     }
-    return choleskySolve(x, L, b);
+    const std::size_t k = detail::rhsColumns(b, L.extent(0));
+    if (k == 0UZ || !isFinite(b)) {
+        return solve::Status::InvalidInput;
+    }
+    // a factor from cholesky has finite entries and a positive diagonal
+    detail::choleskySubstitute(x, L, b, k);
+    return solve::Status::Success;
 }
 
 /**
