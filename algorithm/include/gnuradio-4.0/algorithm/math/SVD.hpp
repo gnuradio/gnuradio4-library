@@ -87,10 +87,10 @@ struct JacobiRotation {
  * J^H G J has a zero off-diagonal entry. Of the two such rotations this returns the one with the
  * smaller angle, |t| <= 1 for t = |s| / c. For gamma = 0 it returns the identity.
  *
- * The angle depends only on the ratios of alpha, beta and |gamma|. When beta - alpha or
- * |alpha| + |beta| overflows, the function divides the three by a power of two near the largest
- * of their magnitudes, within the normal exponent range, and forms the angle from the scaled
- * values. For |zeta| at or above 2^(max_exponent / 2 - 1) the function takes t = 1 / (2 |zeta|),
+ * The angle depends only on the ratios of alpha, beta and |gamma|. When beta - alpha,
+ * |alpha| + |beta| or 2 |gamma| overflows, the function divides the three by a power of two near
+ * the largest of their magnitudes, within the normal exponent range, and forms the angle from the
+ * scaled values. For |zeta| at or above 2^(max_exponent / 2 - 1) the function takes t = 1 / (2 |zeta|),
  * the limit of the full formula, without forming zeta^2. The shift t |gamma| has |t| <= 1 and
  * stays finite.
  */
@@ -103,14 +103,14 @@ template<typename T, typename BaseValueType = gr::meta::fundamental_base_value_t
     }
     BaseValueType difference = beta - alpha;
     BaseValueType sum        = std::abs(alpha) + std::abs(beta);
-    BaseValueType off        = absOff;
-    if (!std::isfinite(difference) || !std::isfinite(sum)) {
+    BaseValueType twiceOff   = BaseValueType{2} * absOff;
+    if (!std::isfinite(difference) || !std::isfinite(sum) || !std::isfinite(twiceOff)) {
         const int           exponent = std::clamp(std::ilogb(std::max({std::abs(alpha), std::abs(beta), absOff})), limits::min_exponent - 1, limits::max_exponent - 1);
         const BaseValueType a        = std::ldexp(alpha, -exponent);
         const BaseValueType b        = std::ldexp(beta, -exponent);
         difference                   = b - a;
         sum                          = std::abs(a) + std::abs(b);
-        off                          = std::ldexp(absOff, -exponent);
+        twiceOff                     = BaseValueType{2} * std::ldexp(absOff, -exponent);
     }
 
     constexpr BaseValueType epsilon = limits::epsilon() * BaseValueType{1000};
@@ -119,7 +119,7 @@ template<typename T, typename BaseValueType = gr::meta::fundamental_base_value_t
     if (std::abs(difference) <= epsilon * sum) {
         t = BaseValueType{1}; // equal diagonal entries: a rotation by 45 degrees
     } else {
-        const BaseValueType zeta      = difference / (BaseValueType{2} * off);
+        const BaseValueType zeta      = difference / twiceOff;
         const BaseValueType magnitude = std::abs(zeta);
         const BaseValueType large     = std::ldexp(BaseValueType{1}, limits::max_exponent / 2 - 1);
         t                             = magnitude < large ? BaseValueType{1} / (magnitude + std::sqrt(BaseValueType{1} + zeta * zeta)) : BaseValueType{1} / (BaseValueType{2} * magnitude);

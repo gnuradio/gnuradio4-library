@@ -143,6 +143,27 @@ Tensor<T> diagonal(const Tensor<Real<T>>& values) {
     return D;
 }
 
+/// The largest entry of A V - V diag(values) relative to `scale`, with each factor divided by `scale`, a power of two, before the product. A NaN entry gives NaN.
+template<typename T>
+Real<T> scaledResidual(const Tensor<T>& A, const Tensor<T>& V, const Tensor<Real<T>>& values, Real<T> scale) {
+    const std::size_t n = values.size();
+    Real<T>           residual{0};
+    for (std::size_t i = 0UZ; i < n; ++i) {
+        for (std::size_t k = 0UZ; k < n; ++k) {
+            T av{0};
+            for (std::size_t j = 0UZ; j < n; ++j) {
+                av += (A[i, j] / scale) * V[j, k];
+            }
+            const Real<T> entry = static_cast<Real<T>>(std::abs(av - V[i, k] * (values[k] / scale)));
+            if (std::isnan(entry)) {
+                return entry;
+            }
+            residual = std::max(residual, entry);
+        }
+    }
+    return residual;
+}
+
 /// ||M^H a|| / ||a||: the share of a vector that the columns of M capture.
 template<typename T>
 Real<T> projectionNorm(const Tensor<T>& M, const Tensor<T>& a) {
@@ -213,21 +234,30 @@ const boost::ut::suite<"eigh"> _eigh = [] {
             Tensor<Real<T>> values;
             Tensor<T>       V;
             expect(eigh(values, V, A) == eig::Status::Success) << typeName<T>() << scale << fatal;
-
-            // the residual A V - V diag(values) relative to s, with each factor divided by s, a power of two, before the product
-            Real<T> residual{0};
-            for (std::size_t i = 0UZ; i < 2UZ; ++i) {
-                for (std::size_t k = 0UZ; k < 2UZ; ++k) {
-                    T av{0};
-                    for (std::size_t j = 0UZ; j < 2UZ; ++j) {
-                        av += (A[i, j] / scale) * V[j, k];
-                    }
-                    residual = std::max(residual, static_cast<Real<T>>(std::abs(av - V[i, k] * (values[k] / scale))));
-                }
-            }
-            expect(le(residual, tolerance<T>(2))) << typeName<T>() << scale << "A V = V diag(values)";
+            expect(le(scaledResidual(A, V, values, scale), tolerance<T>(2))) << typeName<T>() << scale << "A V = V diag(values)";
             expect(le(std::abs(values[0] / scale + lambda), tolerance<T>(2))) << typeName<T>() << scale << values[0];
             expect(le(std::abs(values[1] / scale - lambda), tolerance<T>(2))) << typeName<T>() << scale << values[1];
+        }
+    } | ElementTypes{};
+
+    "a pair whose doubled off-diagonal entry overflows decomposes as it does at unit scale"_test = []<typename T> {
+        // [[0, g], [conj(g), s]] with |g| = s has eigenvalues s (1 - sqrt(5)) / 2 and s (1 + sqrt(5)) / 2.
+        // For s = 2^(max_exponent - 1) the eigenvalues and the Frobenius norm are finite, and 2 |g| overflows.
+        const Real<T>                   top   = std::ldexp(Real<T>{1}, std::numeric_limits<Real<T>>::max_exponent - 1);
+        const std::pair<double, double> g     = gr::meta::complex_like<T> ? std::pair{0.6, 0.8} : std::pair{1.0, 0.0};
+        const Real<T>                   root5 = std::sqrt(Real<T>{5});
+        for (const Real<T> scale : {Real<T>{1}, top}) {
+            Tensor<T> A = matrix<T>(2, 2, {{0, 0}, g, {g.first, -g.second}, {1, 0}});
+            for (auto& a : A) {
+                a *= scale;
+            }
+            Tensor<Real<T>> values;
+            Tensor<T>       V;
+            expect(eigh(values, V, A) == eig::Status::Success) << typeName<T>() << scale << fatal;
+            expect(std::isfinite(values[0]) && std::isfinite(values[1])) << typeName<T>() << scale << values[0] << values[1];
+            expect(le(scaledResidual(A, V, values, scale), tolerance<T>(2))) << typeName<T>() << scale << "A V = V diag(values)";
+            expect(le(std::abs(values[0] / scale - (Real<T>{1} - root5) / Real<T>{2}), tolerance<T>(2))) << typeName<T>() << scale << values[0];
+            expect(le(std::abs(values[1] / scale - (Real<T>{1} + root5) / Real<T>{2}), tolerance<T>(2))) << typeName<T>() << scale << values[1];
         }
     } | ElementTypes{};
 
