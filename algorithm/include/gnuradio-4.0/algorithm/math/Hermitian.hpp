@@ -130,7 +130,7 @@ requires detail::FloatingElement<T>
                 const auto  rotate = detail::jacobiRotation(app, aqq, apq);
                 detail::rotateColumns(W, p, q, rotate.c, rotate.s, n);
                 detail::rotateRows(W, p, q, rotate.c, rotate.s, n);
-                // the 2 x 2 block is set from its closed form, which leaves no rounding residue at (p, q)
+                // the rotation zeroes entry (p, q); the 2 x 2 block is set from its closed form, which leaves no rounding residue there
                 W[p, p] = T{app - rotate.shift};
                 W[q, q] = T{aqq + rotate.shift};
                 W[p, q] = T{0};

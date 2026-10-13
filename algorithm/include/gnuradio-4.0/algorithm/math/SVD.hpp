@@ -85,14 +85,16 @@ struct JacobiRotation {
  * @brief The Jacobi rotation that diagonalizes the Hermitian 2 x 2 matrix G = [[alpha, gamma], [conj(gamma), beta]].
  *
  * J^H G J has a zero off-diagonal entry. Of the two such rotations this returns the one with the
- * smaller angle, |t| <= 1 for t = |s| / c. For gamma = 0 it returns the identity.
+ * smaller angle, |t| <= 1 for t = |s| / c. For gamma = 0 it returns the identity. Every other pair
+ * takes its angle from zeta = (beta - alpha) / (2 |gamma|), and alpha = beta gives 45 degrees.
  *
- * The angle depends only on the ratios of alpha, beta and |gamma|. When beta - alpha,
- * |alpha| + |beta| or 2 |gamma| overflows, the function divides the three by a power of two near
- * the largest of their magnitudes, within the normal exponent range, and forms the angle from the
- * scaled values. For |zeta| at or above 2^(max_exponent / 2 - 1) the function takes t = 1 / (2 |zeta|),
- * the limit of the full formula, without forming zeta^2. The shift t |gamma| has |t| <= 1 and
- * stays finite.
+ * The angle depends only on the ratios of alpha, beta and |gamma|. When beta - alpha or 2 |gamma|
+ * overflows, the function divides the three by a power of two near the largest of their magnitudes,
+ * within the normal exponent range, and forms the angle from the scaled values. For |zeta| at or
+ * above 2^(max_exponent / 2 - 1) the function takes t = 1 / (2 |zeta|), the limit of the full
+ * formula, and computes it as (2 |gamma| / |beta - alpha|) / 2. That form needs neither zeta^2 nor
+ * zeta, so t rounds to zero only below the smallest subnormal value. The shift t |gamma| has
+ * |t| <= 1 and stays finite.
  */
 template<typename T, typename BaseValueType = gr::meta::fundamental_base_value_type_t<T>>
 [[nodiscard]] JacobiRotation<T, BaseValueType> jacobiRotation(BaseValueType alpha, BaseValueType beta, T gamma) noexcept {
@@ -102,30 +104,20 @@ template<typename T, typename BaseValueType = gr::meta::fundamental_base_value_t
         return {BaseValueType{1}, T{0}, BaseValueType{0}};
     }
     BaseValueType difference = beta - alpha;
-    BaseValueType sum        = std::abs(alpha) + std::abs(beta);
     BaseValueType twiceOff   = BaseValueType{2} * absOff;
-    if (!std::isfinite(difference) || !std::isfinite(sum) || !std::isfinite(twiceOff)) {
-        const int           exponent = std::clamp(std::ilogb(std::max({std::abs(alpha), std::abs(beta), absOff})), limits::min_exponent - 1, limits::max_exponent - 1);
-        const BaseValueType a        = std::ldexp(alpha, -exponent);
-        const BaseValueType b        = std::ldexp(beta, -exponent);
-        difference                   = b - a;
-        sum                          = std::abs(a) + std::abs(b);
-        twiceOff                     = BaseValueType{2} * std::ldexp(absOff, -exponent);
+    if (!std::isfinite(difference) || !std::isfinite(twiceOff)) {
+        const int exponent = std::clamp(std::ilogb(std::max({std::abs(alpha), std::abs(beta), absOff})), limits::min_exponent - 1, limits::max_exponent - 1);
+        difference         = std::ldexp(beta, -exponent) - std::ldexp(alpha, -exponent);
+        twiceOff           = BaseValueType{2} * std::ldexp(absOff, -exponent);
     }
 
-    constexpr BaseValueType epsilon = limits::epsilon() * BaseValueType{1000};
-    const T                 phase   = gamma / absOff; // +1 or -1 for a real element type
-    BaseValueType           t;
-    if (std::abs(difference) <= epsilon * sum) {
-        t = BaseValueType{1}; // equal diagonal entries: a rotation by 45 degrees
-    } else {
-        const BaseValueType zeta      = difference / twiceOff;
-        const BaseValueType magnitude = std::abs(zeta);
-        const BaseValueType large     = std::ldexp(BaseValueType{1}, limits::max_exponent / 2 - 1);
-        t                             = magnitude < large ? BaseValueType{1} / (magnitude + std::sqrt(BaseValueType{1} + zeta * zeta)) : BaseValueType{1} / (BaseValueType{2} * magnitude);
-        if (zeta < BaseValueType{0}) {
-            t = -t;
-        }
+    const T             phase     = gamma / absOff; // +1 or -1 for a real element type
+    const BaseValueType zeta      = difference / twiceOff;
+    const BaseValueType magnitude = std::abs(zeta);
+    const BaseValueType large     = std::ldexp(BaseValueType{1}, limits::max_exponent / 2 - 1);
+    BaseValueType       t         = magnitude < large ? BaseValueType{1} / (magnitude + std::sqrt(BaseValueType{1} + zeta * zeta)) : (twiceOff / std::abs(difference)) / BaseValueType{2};
+    if (zeta < BaseValueType{0}) {
+        t = -t;
     }
     const BaseValueType c = BaseValueType{1} / std::sqrt(BaseValueType{1} + t * t);
     return {c, phase * (c * t), t * absOff};

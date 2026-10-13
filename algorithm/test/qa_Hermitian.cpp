@@ -261,6 +261,20 @@ const boost::ut::suite<"eigh"> _eigh = [] {
         }
     } | ElementTypes{};
 
+    "a pair with nearly equal diagonal entries decomposes with a small residual"_test = []<typename T> {
+        // [[1, g], [conj(g), 1 + gap]] with |g| = 1e-5. For float the gap 2e-4 is about 1700 eps. The rotation for that
+        // pair is about 2.9 degrees, far from the 45 degrees of an equal pair. The gaps 0 and 1e-3 are controls.
+        const std::pair<double, double> g = gr::meta::complex_like<T> ? std::pair{0.6e-5, 0.8e-5} : std::pair{1e-5, 0.0};
+        for (const double gap : {0.0, 2e-4, 1e-3}) {
+            const Tensor<T> A = matrix<T>(2, 2, {{1, 0}, g, {g.first, -g.second}, {1.0 + gap, 0}});
+            Tensor<Real<T>> values;
+            Tensor<T>       V;
+            expect(eigh(values, V, A) == eig::Status::Success) << typeName<T>() << gap << fatal;
+            expect(le(scaledResidual(A, V, values, Real<T>{1}), tolerance<T>(2))) << typeName<T>() << gap << "A V = V diag(values)";
+            expect(le(relativeError(multiply(adjoint(V), V), identity<T>(2)), tolerance<T>(2))) << typeName<T>() << gap << "V^H V = I";
+        }
+    } | ElementTypes{};
+
     "eigenvalues worked by hand"_test = []<typename T> {
         // [[2, g], [conj(g), 2]] with |g| = 1 has eigenvalues 2 - |g| and 2 + |g|
         const std::pair<double, double> g = gr::meta::complex_like<T> ? std::pair{0.6, 0.8} : std::pair{1.0, 0.0};
