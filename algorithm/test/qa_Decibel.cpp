@@ -22,11 +22,11 @@ const boost::ut::suite<"Decibel"> decibelTests = [] {
 
     "a ratio above the floor is its exact dB value"_test = []<typename F> {
         expect(eq(toDb(F{1}), F{0}));
-        expect(approx(toDb(F{100}), F{20}, F{1e-5f}));
-        expect(approx(toDb(F{0.5f}), F{10} * std::log10(F{0.5f}), F{1e-6f}));
+        expect(approx(toDb(F{100}), F{20}, static_cast<F>(1e-5)));
+        expect(approx(toDb(static_cast<F>(0.5)), F{10} * std::log10(static_cast<F>(0.5)), static_cast<F>(1e-6)));
         expect(eq(amplitudeToDb(F{1}), F{0}));
-        expect(approx(amplitudeToDb(F{100}), F{40}, F{1e-5f}));
-        expect(approx(amplitudeToDb(F{0.5f}), F{20} * std::log10(F{0.5f}), F{1e-6f}));
+        expect(approx(amplitudeToDb(F{100}), F{40}, static_cast<F>(1e-5)));
+        expect(approx(amplitudeToDb(static_cast<F>(0.5)), F{20} * std::log10(static_cast<F>(0.5)), static_cast<F>(1e-6)));
     } | std::tuple<float, double>{};
 
     "zero, a negative, negative infinity and a value below the floor read as the floor"_test = []<typename F> {
@@ -40,8 +40,8 @@ const boost::ut::suite<"Decibel"> decibelTests = [] {
     } | std::tuple<float, double>{};
 
     "the floor ratio itself reads at the floor level"_test = []<typename F> {
-        expect(approx(toDb(static_cast<F>(kDbFloorPower)), static_cast<F>(kDbFloor), F{1e-3f}));
-        expect(approx(amplitudeToDb(static_cast<F>(kDbFloorAmplitude)), static_cast<F>(kDbFloor), F{1e-3f}));
+        expect(approx(toDb(static_cast<F>(kDbFloorPower)), static_cast<F>(kDbFloor), static_cast<F>(1e-3)));
+        expect(approx(amplitudeToDb(static_cast<F>(kDbFloorAmplitude)), static_cast<F>(kDbFloor), static_cast<F>(1e-3)));
     } | std::tuple<float, double>{};
 
     "a NaN stays a NaN"_test = []<typename F> {
