@@ -333,7 +333,7 @@ const boost::ut::suite<"subspace"> _subspace = [] {
         const Tensor<T> a2 = matrix<T>(6, 1, {{1, 0}, {-1, 0}, {1, 0}, {-1, 0}, {1, 0}, {-1, 0}});
 
         // R = a1 a1^H + 2 a2 a2^H + noisePower I
-        const Real<T> noisePower = Real<T>{0.01f};
+        const Real<T> noisePower = static_cast<Real<T>>(0.01);
         Tensor<T>     R          = multiply(a1, adjoint(a1));
         const auto    R2         = multiply(a2, adjoint(a2));
         for (std::size_t i = 0UZ; i < 6UZ; ++i) {

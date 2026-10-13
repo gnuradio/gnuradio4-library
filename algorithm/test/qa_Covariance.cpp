@@ -118,41 +118,6 @@ bool isExactlyHermitian(const Tensor<T>& R) {
     return true;
 }
 
-template<typename T>
-Tensor<T> multiply(const Tensor<T>& A, const Tensor<T>& B) {
-    Tensor<T> C({A.extent(0), B.extent(1)});
-    C.fill(T{0});
-    for (std::size_t i = 0UZ; i < A.extent(0); ++i) {
-        for (std::size_t j = 0UZ; j < B.extent(1); ++j) {
-            for (std::size_t k = 0UZ; k < A.extent(1); ++k) {
-                C[i, j] += A[i, k] * B[k, j];
-            }
-        }
-    }
-    return C;
-}
-
-template<typename T>
-Tensor<T> adjoint(const Tensor<T>& A) {
-    Tensor<T> H({A.extent(1), A.extent(0)});
-    for (std::size_t i = 0UZ; i < A.extent(0); ++i) {
-        for (std::size_t j = 0UZ; j < A.extent(1); ++j) {
-            H[j, i] = conjugate(A[i, j]);
-        }
-    }
-    return H;
-}
-
-template<typename T>
-Tensor<T> identity(std::size_t n) {
-    Tensor<T> I({n, n});
-    I.fill(T{0});
-    for (std::size_t i = 0UZ; i < n; ++i) {
-        I[i, i] = T{1};
-    }
-    return I;
-}
-
 /// The largest element-wise distance between two tensors of equal size, relative to the largest magnitude in `reference`.
 template<typename T>
 Real<T> relativeError(const Tensor<T>& actual, const Tensor<T>& reference) {
@@ -214,7 +179,7 @@ const boost::ut::suite<"CovarianceAccumulator"> _accumulator = [] {
     "exponential averaging weights by powers of the forgetting factor"_test = []<typename T> {
         const std::vector<Tensor<T>> snapshots{vector<T>({{0, 1}, {1, 0}}), vector<T>({{2, 0}, {0, 0}}), vector<T>({{1, -1}, {-1, 0}})};
         CovarianceAccumulator<T>     accumulator(2UZ);
-        expect(accumulator.setExponentialAveraging(Real<T>{0.5f})) << typeName<T>();
+        expect(accumulator.setExponentialAveraging(static_cast<Real<T>>(0.5))) << typeName<T>();
         expect(accumulator.add(snapshots[0]) && accumulator.add(snapshots[1])) << typeName<T>() << "every snapshot completes an estimate";
 
         // (0.5 x1 x1^H + x2 x2^H) / 1.5, worked by hand
@@ -239,7 +204,7 @@ const boost::ut::suite<"CovarianceAccumulator"> _accumulator = [] {
         const Tensor<T> R = accumulator.matrix();
         expect(eq(R.size(), 4UZ) && std::ranges::all_of(R, [](const T& r) { return r == T{0}; })) << typeName<T>();
 
-        expect(!accumulator.setExponentialAveraging(Real<T>{0}) && !accumulator.setExponentialAveraging(Real<T>{1.5f})) << typeName<T>();
+        expect(!accumulator.setExponentialAveraging(Real<T>{0}) && !accumulator.setExponentialAveraging(static_cast<Real<T>>(1.5))) << typeName<T>();
         expect(accumulator.averaging() == CovarianceAccumulator<T>::Averaging::Block && eq(accumulator.blockSize(), 4UZ)) << typeName<T>();
     } | ElementTypes{};
 
