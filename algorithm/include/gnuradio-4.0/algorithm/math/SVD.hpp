@@ -239,8 +239,8 @@ template<typename T, typename BaseValueType = gr::meta::fundamental_base_value_t
 BaseValueType householderVector(T* x, std::size_t n, BaseValueType& tau) {
     // compute Householder vector v and scalar tau such that:
     // H = I - tau * v * v^H applies H * x = [beta; 0; 0; ...]
-    // x is overwritten with v (v[0] = 1 is implicit)
-    // returns beta (the resulting first element after reflection)
+    // x[0] is overwritten with beta and x[1:n] with the tail of v (v[0] = 1 is implicit)
+    // returns beta for real x and |beta| for complex x
 
     if (n == 0) {
         tau = BaseValueType{0};
@@ -255,8 +255,10 @@ BaseValueType householderVector(T* x, std::size_t n, BaseValueType& tau) {
         }
     }
 
-    // The squared norms are taken of x * down, where down is the power of two that brings the largest magnitude
-    // into [1, 2). No square underflows or overflows at any input scale, and the scaling itself is exact.
+    // The reflector is formed from x * down, where down is the power of two that brings the largest magnitude into
+    // [1, 2), or to eps or above for a subnormal one. The norms, beta and v0 stay finite at any input scale, the
+    // square of the largest magnitude does not underflow, and the scaling itself is exact. Only beta returns to the
+    // input scale.
     BaseValueType maxMagnitude{0};
     for (std::size_t i = 0; i < n; ++i) {
         maxMagnitude = std::max(maxMagnitude, static_cast<BaseValueType>(std::abs(x[i])));
@@ -281,27 +283,28 @@ BaseValueType householderVector(T* x, std::size_t n, BaseValueType& tau) {
         }
     }
 
-    // compute norm of entire vector: ||x|| = up * sqrt(|x[0] * down|^2 + xnorm_sq)
-    BaseValueType x0_mag_sq = squaredMagnitude(x[0] * down);
-    BaseValueType xnorm     = up * std::sqrt(x0_mag_sq + xnorm_sq);
+    // compute the scaled norm of the entire vector: ||x|| * down = sqrt(|x[0] * down|^2 + xnorm_sq)
+    const T       x0        = x[0] * down;
+    BaseValueType x0_mag_sq = squaredMagnitude(x0);
+    BaseValueType xnorm     = std::sqrt(x0_mag_sq + xnorm_sq);
 
-    // choose sign to avoid cancellation: beta = -sign(x[0]) * ||x||
+    // choose sign to avoid cancellation: beta = -sign(x[0]) * ||x||, here scaled by down
     T beta;
     if constexpr (gr::meta::complex_like<T>) {
         // for complex: use phase of x[0]
-        if (std::abs(x[0]) > BaseValueType{0}) {
-            T phase = x[0] / std::abs(x[0]);
+        if (std::abs(x0) > BaseValueType{0}) {
+            T phase = x0 / std::abs(x0);
             beta    = -phase * xnorm;
         } else {
             beta = T{-xnorm, 0};
         }
     } else {
-        beta = (x[0] >= BaseValueType{0}) ? -xnorm : xnorm;
+        beta = (x0 >= BaseValueType{0}) ? -xnorm : xnorm;
     }
 
-    // v[0] = x[0] - beta, v[1:n] = x[1:n]
-    T             v0        = x[0] - beta;
-    BaseValueType v0_mag_sq = squaredMagnitude(v0 * down);
+    // v[0] = x[0] - beta, v[1:n] = x[1:n], all scaled by down
+    T             v0        = x0 - beta;
+    BaseValueType v0_mag_sq = squaredMagnitude(v0);
     BaseValueType vnorm_sq  = v0_mag_sq + xnorm_sq;
 
     // for normalized vector v' = [1, x[1]/v0, ...]:
@@ -309,15 +312,16 @@ BaseValueType householderVector(T* x, std::size_t n, BaseValueType& tau) {
     // tau = 2 / ||v||^2, so tau' = 2 * |v0|^2 / ||v||^2
     tau = BaseValueType{2} * v0_mag_sq / vnorm_sq;
 
-    // store normalized tail: x[1:n] /= v0
-    // x[0] stores v0 for back-accumulation (but we use implicit v[0]=1 in transformations)
-    x[0] = v0;
-    if (v0_mag_sq > BaseValueType{0}) { // tau is non-zero exactly when the tail is scaled
-        T scale = T{1} / v0;
-        for (std::size_t i = 1; i < n; ++i) {
-            x[i] *= scale;
-        }
+    // store normalized tail: x[1:n] /= v0, the same ratio in scaled coordinates
+    // |v0| >= ||x * down|| >= eps, so its reciprocal is finite
+    T scale = T{1} / v0;
+    for (std::size_t i = 1; i < n; ++i) {
+        x[i] = (x[i] * down) * scale;
     }
+
+    // x[0] receives beta at the input scale, the first entry of H * x
+    beta = beta * up;
+    x[0] = beta;
 
     // for complex: return |beta| (the bidiagonal will be real)
     // for real: return beta with sign (handle signs during SVD)
@@ -419,7 +423,7 @@ void bidiagonalise(Tensor<T>& A, std::vector<BaseValueType>& tauU, std::vector<B
         diag[k]            = beta;
 
         // store Householder vector back (skip first element, it's implicit 1)
-        A[k, k] = work[0]; // store v0 for back-accumulation
+        A[k, k] = work[0]; // beta of the left reflector
         for (std::size_t i = 1; i < colLen; ++i) {
             A[k + i, k] = work[i];
         }
@@ -444,7 +448,7 @@ void bidiagonalise(Tensor<T>& A, std::vector<BaseValueType>& tauU, std::vector<B
             }
 
             // store Householder vector back
-            A[k, k + 1] = work[0]; // store v0
+            A[k, k + 1] = work[0]; // beta of the right reflector
             for (std::size_t j = 1; j < rowLen; ++j) {
                 A[k, k + 1 + j] = work[j];
             }

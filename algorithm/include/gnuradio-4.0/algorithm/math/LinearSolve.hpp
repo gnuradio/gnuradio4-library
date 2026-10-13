@@ -100,13 +100,39 @@ void backSubstitute(const Tensor<T>& R, Tensor<T>& Y, std::size_t n) {
     }
 }
 
-/// Factors an m x n work matrix with m >= n in place: R above the diagonal and the Householder tails below it.
+/**
+ * The exponent e of the power of two 2^-e that brings every entry of M to at most max / (4 sqrt(rows)) per
+ * component, or 0 when M is already there. A column of `rows` such entries has a norm r of at most max / 2.
+ * A Householder reflector applied to it forms intermediates of at most 2 r, which stay finite.
+ */
 template<typename T, typename RealT = gr::meta::fundamental_base_value_type_t<T>>
-void householderFactor(Tensor<T>& W, std::vector<RealT>& tau, std::vector<T>& rDiagonal) {
+[[nodiscard]] int reflectorShift(const Tensor<T>& M, std::size_t rows) noexcept {
+    RealT largest{0};
+    for (const T& entry : M) {
+        largest = std::max({largest, static_cast<RealT>(std::abs(std::real(entry))), static_cast<RealT>(std::abs(std::imag(entry)))});
+    }
+    const RealT limit = std::numeric_limits<RealT>::max() / (RealT{4} * std::sqrt(static_cast<RealT>(rows)));
+    return largest > limit ? std::ilogb(largest / limit) + 1 : 0;
+}
+
+/// Multiplies every entry of M by 2^exponent.
+template<typename T, typename RealT = gr::meta::fundamental_base_value_type_t<T>>
+void scaleByPowerOfTwo(Tensor<T>& M, int exponent) noexcept {
+    if (exponent == 0) {
+        return;
+    }
+    const RealT factor = std::ldexp(RealT{1}, exponent);
+    for (T& entry : M) {
+        entry *= factor;
+    }
+}
+
+/// Factors an m x n work matrix with m >= n in place: R on and above the diagonal and the Householder tails below it.
+template<typename T, typename RealT = gr::meta::fundamental_base_value_type_t<T>>
+void householderFactor(Tensor<T>& W, std::vector<RealT>& tau) {
     const std::size_t m = W.extent(0);
     const std::size_t n = W.extent(1);
     tau.assign(n, RealT{0});
-    rDiagonal.assign(n, T{0});
     std::vector<T> column(m);
 
     for (std::size_t k = 0UZ; k < n; ++k) {
@@ -114,12 +140,8 @@ void householderFactor(Tensor<T>& W, std::vector<RealT>& tau, std::vector<T>& rD
         for (std::size_t i = 0UZ; i < length; ++i) {
             column[i] = W[k + i, k];
         }
-        const T x0  = column[0];
-        std::ignore = householderVector(column.data(), length, tau[k]);
-        // householderVector stores v0 = x0 - beta in column[0], so the diagonal entry of R is x0 - v0
-        rDiagonal[k] = (tau[k] == RealT{0}) ? x0 : x0 - column[0];
-
-        W[k, k] = column[0];
+        std::ignore = householderVector(column.data(), length, tau[k]); // column[0] holds beta, the diagonal entry of R
+        W[k, k]     = column[0];
         for (std::size_t i = 1UZ; i < length; ++i) {
             W[k + i, k] = column[i];
         }
@@ -274,18 +296,19 @@ requires detail::FloatingElement<T>
             W[i, j] = A[i, j];
         }
     }
+    const int shift = detail::reflectorShift(W, m);
+    detail::scaleByPowerOfTwo(W, -shift);
     std::vector<RealT> tau;
-    std::vector<T>     rDiagonal;
-    detail::householderFactor(W, tau, rDiagonal);
+    detail::householderFactor(W, tau);
 
     Tensor<T> Rout({n, n});
     Rout.fill(T{0});
     for (std::size_t i = 0UZ; i < n; ++i) {
-        Rout[i, i] = rDiagonal[i];
-        for (std::size_t j = i + 1UZ; j < n; ++j) {
+        for (std::size_t j = i; j < n; ++j) {
             Rout[i, j] = W[i, j];
         }
     }
+    detail::scaleByPowerOfTwo(Rout, shift);
     detail::accumulateU(W, tau, Q);
     R = std::move(Rout);
     return solve::Status::Success;
@@ -318,23 +341,27 @@ requires detail::FloatingElement<T>
             W[i, j] = A[i, j];
         }
     }
+    // A 2^-shiftA and b 2^-shiftB give the solution x 2^(shiftA - shiftB)
+    const int shiftA = detail::reflectorShift(W, m);
+    detail::scaleByPowerOfTwo(W, -shiftA);
     std::vector<RealT> tau;
-    std::vector<T>     rDiagonal;
-    detail::householderFactor(W, tau, rDiagonal);
+    detail::householderFactor(W, tau);
 
     RealT largest{0};
-    for (const T& r : rDiagonal) {
-        largest = std::max(largest, static_cast<RealT>(std::abs(r)));
+    for (std::size_t i = 0UZ; i < n; ++i) {
+        largest = std::max(largest, static_cast<RealT>(std::abs(W[i, i])));
     }
     const RealT negligible = std::numeric_limits<RealT>::epsilon() * static_cast<RealT>(m) * largest;
-    for (const T& r : rDiagonal) {
-        if (!(static_cast<RealT>(std::abs(r)) > negligible)) {
+    for (std::size_t i = 0UZ; i < n; ++i) {
+        if (!(static_cast<RealT>(std::abs(W[i, i])) > negligible)) {
             return solve::Status::Singular;
         }
     }
 
     // Y = Q^H b: apply H_0, H_1, ... in order; each reflector is Hermitian
-    Tensor<T> Y = detail::rhsMatrix<T>(b, m, k);
+    Tensor<T> Y      = detail::rhsMatrix<T>(b, m, k);
+    const int shiftB = detail::reflectorShift(Y, m);
+    detail::scaleByPowerOfTwo(Y, -shiftB);
     for (std::size_t j = 0UZ; j < n; ++j) {
         if (tau[j] == RealT{0}) {
             continue;
@@ -352,10 +379,8 @@ requires detail::FloatingElement<T>
         }
     }
 
-    for (std::size_t i = 0UZ; i < n; ++i) {
-        W[i, i] = rDiagonal[i];
-    }
     detail::backSubstitute(W, Y, n);
+    detail::scaleByPowerOfTwo(Y, shiftB - shiftA);
     detail::storeSolution(x, Y, n, b.rank());
     return solve::Status::Success;
 }

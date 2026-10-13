@@ -282,6 +282,30 @@ const boost::ut::suite<"Householder QR and least squares"> _qr = [] {
         }
     } | ElementTypes{};
 
+    "a column near either end of the range factors and solves as at unit scale"_test = []<typename T> {
+        // A = s (x0, 1/2) with |x0| = 1. Unscaled, the reflector's first entry x0 - beta has magnitude about 2.1 s:
+        // at s = min / 16 its reciprocal overflows, and at s = 5 max / 8 the entry itself overflows. Q, R and x = 1
+        // are finite at both.
+        const T           x0       = gr::meta::complex_like<T> ? element<T>(0.6, 0.8) : element<T>(1.0);
+        constexpr Real<T> largest  = std::numeric_limits<Real<T>>::max();
+        constexpr Real<T> smallest = std::numeric_limits<Real<T>>::min();
+        for (const Real<T> scale : {Real<T>{1}, smallest / Real<T>{16}, largest / Real<T>{8} * Real<T>{5}}) {
+            Tensor<T> A({2UZ, 1UZ});
+            A[0UZ, 0UZ] = x0 * scale;
+            A[1UZ, 0UZ] = T{scale / Real<T>{2}};
+            Tensor<T> Q;
+            Tensor<T> R;
+            expect(householderQr(Q, R, A) == solve::Status::Success) << typeName<T>() << scale << fatal;
+            expect(isFinite(Q) && isFinite(R)) << typeName<T>() << scale << "finite Q and R";
+            expect(le(relativeError(multiply(Q, R), A), tolerance<T>(2))) << typeName<T>() << scale << "A = Q R";
+            expect(le(relativeError(multiply(adjoint(Q), Q), identity<T>(1)), tolerance<T>(2))) << typeName<T>() << scale << "Q^H Q = I";
+
+            Tensor<T> x;
+            expect(leastSquares(x, A, A) == solve::Status::Success) << typeName<T>() << scale << fatal;
+            expect(le(relativeError(x, identity<T>(1)), tolerance<T>(2))) << typeName<T>() << scale << "A x = A gives x = 1";
+        }
+    } | ElementTypes{};
+
     "a consistent tall system gives its chosen solution"_test = []<typename T> {
         const Tensor<T> A  = tallMatrix<T>();
         const Tensor<T> x0 = matrix<T>(3, 1, {{1, -1}, {-2, 0}, {0, 3}});
