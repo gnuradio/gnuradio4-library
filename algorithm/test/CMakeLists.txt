@@ -71,11 +71,15 @@ add_ut_test(qa_Interleaver)
 
 if(EMSCRIPTEN)
   # Simple HTTP server used only for unit tests.
+  #
+  # The IO pool's file-system calls run on the main runtime thread, and main() polls the reader for its chunks without
+  # yielding. PROXY_TO_PTHREAD runs main() on a worker thread and leaves the main runtime thread free for those calls.
   target_link_options(
     qa_FileIo
     PRIVATE
     --pre-js=${CMAKE_CURRENT_SOURCE_DIR}/fileio_pre.js
-    --emrun)
+    --emrun
+    "SHELL:-s PROXY_TO_PTHREAD=1")
 endif()
 
 if(EMSCRIPTEN)
