@@ -43,7 +43,7 @@ printf '::group::S3 setup\n'
   add_mask "${AWS_SECRET_ACCESS_KEY}"
   add_mask "${AWS_ACCESS_KEY_ID}"
 }
-printf '::endgroup::'
+printf '::endgroup::\n'
 if [[ "${use_default}" = "true" ]] ; then
   gh_message "sccache bucket config" "using default cache bucket, read-only!"
 fi;
@@ -69,6 +69,10 @@ EOF
 fi
 
 add_output SCCACHE_CONF "${SCCACHE_CONF}"
+# sccache reads the config file that SCCACHE_CONF names.
+# Its default path depends on the OS (macOS: ~/Library/Application Support/Mozilla.sccache/config).
+export SCCACHE_CONF
+add_env SCCACHE_CONF "${SCCACHE_CONF}"
 export SCCACHE_ERROR_LOG="/tmp/local_sccache.log"
 add_env SCCACHE_ERROR_LOG "${SCCACHE_ERROR_LOG}"
 # These could be set here, but they do spam the compile output slightly.
