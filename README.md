@@ -4,6 +4,13 @@
 
 # GNU Radio 4.0 Library
 
+> [!IMPORTANT]
+> **Repository Moved**
+>
+> Development of `gnuradio4-library` has moved to **[`gnuradio4-blocks`](https://github.com/gnuradio/gnuradio4-blocks)**.
+>
+> This repository is now archived and retained for historical reference. All future development, bug reports, feature requests, and contributions should be directed to `gnuradio4-blocks`.
+
 `gnuradio4-library` provides reusable, non-block signal-processing algorithms
 for GNU Radio 4 applications and block libraries. It builds on the installed
 [`gnuradio4-core`](https://github.com/gnuradio/gnuradio4-core) SDK and supplies
